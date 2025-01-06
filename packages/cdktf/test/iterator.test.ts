@@ -6,8 +6,11 @@ import {
   TerraformIterator,
   Fn,
   TerraformHclModule,
+  TerraformCount,
+  TerraformVariable,
+  Token,
 } from "../lib";
-import { TestResource } from "./helper";
+import { OtherTestResource, TestResource } from "./helper";
 import { TestDataSource } from "./helper/data-source";
 
 test("iterator inline list", () => {
@@ -149,15 +152,15 @@ test("iterator access nested types", () => {
     "${toset(test_resource.input.list_value)}"
   );
   expect(synth.resource.test_resource.test.tags).toMatchInlineSnapshot(`
-    Object {
-      "boolean_map": "\${lookup(each.value[\\"map\\"], \\"a\\", false)}",
-      "list": "\${join(\\",\\", each.value[\\"list_attribute\\"])}",
-      "map": "\${lookup(each.value[\\"map\\"], \\"a\\", \\"default\\")}",
-      "number": "\${tostring(each.value[\\"number_attribute\\"])}",
-      "number_list": "\${tostring(sum(each.value[\\"number_list_attribute\\"]))}",
-      "number_map": "\${lookup(each.value[\\"map\\"], \\"a\\", 1)}",
-      "string": "\${each.value[\\"string_attribute\\"]}",
-      "string_map": "\${lookup(each.value[\\"map\\"], \\"a\\", \\"default\\")}",
+    {
+      "boolean_map": "\${each.value.map.a}",
+      "list": "\${join(",", each.value.list_attribute)}",
+      "map": "\${lookup(each.value.map, "a", "default")}",
+      "number": "\${tostring(each.value.number_attribute)}",
+      "number_list": "\${tostring(sum(each.value.number_list_attribute))}",
+      "number_map": "\${lookup(each.value.map, "a", 1)}",
+      "string": "\${each.value.string_attribute}",
+      "string_map": "\${lookup(each.value.map, "a", "default")}",
     }
   `);
 });
@@ -273,5 +276,256 @@ test("iterator across stacks", () => {
   expect(sourceSynth).toHaveProperty(
     "output.cross-stack-output-test_resourceinputlist_value.value",
     "${test_resource.input.list_value}"
+  );
+});
+
+test("iterator chaining on resources", () => {
+  const app = Testing.app();
+  const stack = new TerraformStack(app, "test");
+  const input = new TestResource(stack, "input", { name: "foo" });
+  const it = TerraformIterator.fromList(input.listValue);
+
+  const resource = new TestResource(stack, "test", {
+    forEach: it,
+    name: it.value,
+  });
+
+  const chainedIt = TerraformIterator.fromList(resource.listValue);
+  new TestResource(stack, "chained", {
+    forEach: chainedIt,
+    name: chainedIt.value,
+  });
+
+  const synth = JSON.parse(Testing.synth(stack));
+
+  expect(synth).toHaveProperty(
+    "resource.test_resource.test.for_each",
+    "${toset(test_resource.input.list_value)}"
+  );
+  expect(synth).toHaveProperty(
+    "resource.test_resource.test.name",
+    "${each.value}"
+  );
+
+  // Chained properties
+  expect(synth).toHaveProperty(
+    "resource.test_resource.chained.for_each",
+    "${toset(test_resource.test.*.list_value)}"
+  );
+  expect(synth).toHaveProperty(
+    "resource.test_resource.chained.name",
+    "${each.value}"
+  );
+});
+
+test("iterator chaining on data sources", () => {
+  const app = Testing.app();
+  const stack = new TerraformStack(app, "test");
+  const it = TerraformIterator.fromList(["a", "b", "c"]);
+
+  const data = new TestDataSource(stack, "test", {
+    forEach: it,
+    name: it.value,
+  });
+
+  const chainedIt = TerraformIterator.fromList(data.listValue);
+  new TestDataSource(stack, "chained", {
+    forEach: chainedIt,
+    name: chainedIt.value,
+  });
+
+  const synth = JSON.parse(Testing.synth(stack));
+
+  expect(synth).toHaveProperty("data.test_data_source.test.for_each");
+  expect(synth).toHaveProperty(
+    "data.test_data_source.test.name",
+    "${each.value}"
+  );
+
+  // Chained properties
+  expect(synth).toHaveProperty(
+    "data.test_data_source.chained.for_each",
+    "${toset(data.test_data_source.test.*.list_value)}"
+  );
+  expect(synth).toHaveProperty(
+    "data.test_data_source.chained.name",
+    "${each.value}"
+  );
+});
+
+test("iterator can be accessed from Complex List", () => {
+  const app = Testing.app();
+  const stack = new TerraformStack(app, "test");
+
+  const resource = new OtherTestResource(stack, "test", {});
+
+  const it = resource.complexComputedList.allWithMapKey("name");
+  new TestDataSource(stack, "iterated", {
+    forEach: it,
+    name: it.value,
+  });
+
+  const synth = JSON.parse(Testing.synth(stack));
+
+  expect(synth).toHaveProperty(
+    "data.test_data_source.iterated.for_each",
+    "${{ for key, val in other_test_resource.test.complex_computed_list: val.name => val }}"
+  );
+  expect(synth).toHaveProperty(
+    "data.test_data_source.iterated.name",
+    "${each.value}"
+  );
+});
+
+test("count can count values", () => {
+  const app = Testing.app();
+  const stack = new TerraformStack(app, "test");
+  const it = TerraformCount.of(3);
+
+  new TestDataSource(stack, "test", {
+    count: it,
+    name: `data${it.index}`,
+  });
+
+  const synth = JSON.parse(Testing.synth(stack));
+
+  expect(synth).toHaveProperty("data.test_data_source.test.count", 3);
+  expect(synth).toHaveProperty(
+    "data.test_data_source.test.name",
+    "data${count.index}"
+  );
+});
+
+test("count can count references", () => {
+  const app = Testing.app();
+  const stack = new TerraformStack(app, "test");
+
+  const resource = new TestResource(stack, "test", { name: "foo" });
+  const it = TerraformCount.of(resource.numericValue);
+
+  new TestDataSource(stack, "test_data", {
+    count: it,
+    name: `data${it.index}`,
+  });
+
+  const synth = JSON.parse(Testing.synth(stack));
+
+  expect(synth).toHaveProperty(
+    "data.test_data_source.test_data.count",
+    "${test_resource.test.numeric_value}"
+  );
+  expect(synth).toHaveProperty(
+    "data.test_data_source.test_data.name",
+    "data${count.index}"
+  );
+});
+
+test("chained iterators used in for_each", () => {
+  const app = Testing.app();
+  const stack = new TerraformStack(app, "test");
+  const it = TerraformIterator.fromList(["a", "b", "c"]);
+  const source = new TestResource(stack, "test", {
+    forEach: it,
+    name: "foo",
+  });
+
+  const chainedIt = TerraformIterator.fromResources(source);
+  new TestResource(stack, "chained", {
+    forEach: chainedIt,
+    name: chainedIt.getString("string_value"),
+  });
+
+  const synth = JSON.parse(Testing.synth(stack));
+  expect(synth).toHaveProperty(
+    "resource.test_resource.chained.for_each",
+    "${test_resource.test}"
+  );
+  expect(synth).toHaveProperty(
+    "resource.test_resource.chained.name",
+    "${each.value.string_value}"
+  );
+});
+
+test("chained iterators from singular resources", () => {
+  const app = Testing.app();
+  const stack = new TerraformStack(app, "test");
+  const source = new TestResource(stack, "test", {
+    name: "foo",
+  });
+
+  expect(() => {
+    TerraformIterator.fromResources(source);
+  }).toThrowErrorMatchingInlineSnapshot(`
+    "Cannot create an iterator from a resource without a forEach argument. If you want to create more instances of this resource, pass an iterator to the forEach argument of the resource first.
+      "
+  `);
+});
+
+test("chained iterators used with count", () => {
+  const app = Testing.app();
+  const stack = new TerraformStack(app, "test");
+
+  const resource = new TestResource(stack, "test", { name: "foo" });
+  const it = TerraformCount.of(resource.numericValue);
+
+  const datasFromCount = new TestDataSource(stack, "test_data", {
+    count: it,
+    name: `data${it.index}`,
+  });
+
+  expect(() => {
+    TerraformIterator.fromDataSources(datasFromCount);
+  }).toThrowErrorMatchingInlineSnapshot(`
+    "You cannot create an iterator from a resource with a count argument.
+    Instead, reuse this resource's TerraformCount instance in the resource you want to use as an iterator.
+
+    If you want to use an iterator to populate a list attribute, replace the count on the resource with an iterator passed into the forEach argument."
+  `);
+});
+
+test("for expressions from iterators", () => {
+  const app = Testing.app();
+  const stack = new TerraformStack(app, "test");
+  const variable = new TerraformVariable(stack, "list", {});
+  const it = TerraformIterator.fromList(variable.listValue);
+  new TestResource(stack, "test", {
+    name: "foo",
+    tags: {
+      // Take a value from items of the list
+      arnProperties: Token.asString(it.pluckProperty("arn")),
+      // Filter out empty values
+      owners: Token.asString(
+        it.forExpressionForList(`val.owner if val.owner != ""`)
+      ),
+
+      // Filter out teams with no members and join them with a comma
+      teams: Token.asString(
+        it.forExpressionForMap(
+          "val.teamName",
+          `join(",", val.teamMembers) if length(val.teamMembers) > 0`
+        )
+      ),
+      // Get the keys of the map
+      keys: Token.asString(it.keys()),
+    },
+  });
+
+  const synth = JSON.parse(Testing.synth(stack));
+  expect(synth).toHaveProperty(
+    "resource.test_resource.test.tags.arnProperties",
+    "${[ for key, val in toset(var.list): val.arn]}"
+  );
+  expect(synth).toHaveProperty(
+    "resource.test_resource.test.tags.owners",
+    '${[ for key, val in toset(var.list): val.owner if val.owner != ""]}'
+  );
+
+  expect(synth).toHaveProperty(
+    "resource.test_resource.test.tags.teams",
+    `\${{ for key, val in toset(var.list): val.teamName => join(",", val.teamMembers) if length(val.teamMembers) > 0 }}`
+  );
+  expect(synth).toHaveProperty(
+    "resource.test_resource.test.tags.keys",
+    "${[ for key, val in toset(var.list): key]}"
   );
 });

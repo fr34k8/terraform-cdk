@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 using System;
 using Providers.Null.Provider;
 using NullResource = Providers.Null.Resource;
@@ -10,7 +13,7 @@ namespace MyCompany.MyApp
     {
         public MyApp(Construct scope, string id) : base(scope, id)
         {
-            new LocalBackend(this, new LocalBackendProps {
+            new LocalBackend(this, new LocalBackendConfig {
                 Path = "terraform.tfstate"
             });
             new NullProvider(this, "Null");
@@ -19,7 +22,7 @@ namespace MyCompany.MyApp
 
         public static void Main(string[] args)
         {
-            App app = Testing.StubVersion(new App(new AppOptions { StackTraces = false }));
+            App app = Testing.StubVersion(new App(new AppConfig { StackTraces = false }));
             new MyApp(app, "csharp-simple");
             app.Synth();
         }

@@ -8,6 +8,7 @@ import { Expression } from ".";
 import { isArray } from "util";
 import { ITerraformAddressable } from "./terraform-addressable";
 import { Token } from "./tokens";
+import { Precondition } from "./terraform-conditions";
 
 const TERRAFORM_OUTPUT_SYMBOL = Symbol.for("cdktf/TerraformOutput");
 
@@ -23,6 +24,7 @@ export interface TerraformOutputConfig {
    * @default false
    */
   readonly staticId?: boolean;
+  readonly precondition?: Precondition;
 }
 
 // eslint-disable-next-line jsdoc/require-jsdoc
@@ -31,6 +33,7 @@ export class TerraformOutput extends TerraformElement {
   public description?: string;
   public sensitive?: boolean;
   public dependsOn?: ITerraformDependable[];
+  public precondition?: Precondition;
 
   constructor(scope: Construct, id: string, config: TerraformOutputConfig) {
     super(scope, id);
@@ -40,10 +43,11 @@ export class TerraformOutput extends TerraformElement {
     this.sensitive = config.sensitive;
     this.dependsOn = config.dependsOn;
     this.staticId = config.staticId || false;
+    this.precondition = config.precondition;
     Object.defineProperty(this, TERRAFORM_OUTPUT_SYMBOL, { value: true });
   }
 
-  public static isTerrafromOutput(x: any): x is TerraformOutput {
+  public static isTerraformOutput(x: any): x is TerraformOutput {
     return x !== null && typeof x === "object" && TERRAFORM_OUTPUT_SYMBOL in x;
   }
 
@@ -96,6 +100,48 @@ export class TerraformOutput extends TerraformElement {
       description: this.description,
       sensitive: this.sensitive,
       depends_on: this.dependsOn?.map((resource) => resource.fqn),
+    };
+  }
+
+  protected synthesizeHclAttributes(): { [key: string]: any } {
+    return Object.fromEntries(
+      Object.entries({
+        value: {
+          value: this.synthesizeValue(this.value),
+          type: "any",
+          isBlock: false,
+          storageClassType: "",
+        },
+        description: {
+          value: this.description,
+          type: "simple",
+          isBlock: false,
+          storageClassType: "string",
+        },
+        sensitive: {
+          value: this.sensitive,
+          type: "simple",
+          isBlock: false,
+          storageClassType: "bool",
+        },
+        depends_on: {
+          value: this.dependsOn?.map((resource) => resource.fqn),
+          type: "list",
+          isBlock: false,
+          storageClassType: "stringList",
+        },
+      }).filter(([, value]) => value.value !== undefined)
+    );
+  }
+
+  public toHclTerraform(): any {
+    return {
+      output: {
+        [this.friendlyUniqueId]: deepMerge(
+          this.synthesizeHclAttributes(),
+          this.rawOverrides
+        ),
+      },
     };
   }
 

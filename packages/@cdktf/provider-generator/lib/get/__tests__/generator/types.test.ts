@@ -431,13 +431,18 @@ test("incompatible resource names", async () => {
   await code.save(workdir);
 
   const files = fs.readdirSync(path.join(workdir, "providers/test"));
+  const topLevelFiles = ["index.ts", "lazy-index.ts"];
   expect(files).toMatchInlineSnapshot(`
-    Array [
+    [
       "function-resource",
       "index.ts",
+      "lazy-index.ts",
+      "license-resource",
       "object-resource",
+      "provider-resource",
       "static-resource",
       "string-resource",
+      "version-resource",
     ]
   `);
 
@@ -447,7 +452,7 @@ test("incompatible resource names", async () => {
         workdir,
         "providers/test/",
         file,
-        file !== "index.ts" ? "index.ts" : ""
+        topLevelFiles.includes(file) ? "" : "index.ts"
       ),
       "utf-8"
     );
@@ -476,6 +481,27 @@ test("list of string map attribute", async () => {
   expect(output).toMatchSnapshot();
 });
 
+test("map of string list attribute", async () => {
+  const code = new CodeMaker();
+  const workdir = fs.mkdtempSync(
+    path.join(os.tmpdir(), "map-of-string-list.test")
+  );
+  const spec = JSON.parse(
+    fs.readFileSync(
+      path.join(__dirname, "fixtures", "map-of-string-list.test.fixture.json"),
+      "utf-8"
+    )
+  );
+  new TerraformProviderGenerator(code, spec).generateAll();
+  await code.save(workdir);
+
+  const output = fs.readFileSync(
+    path.join(workdir, "providers/aws/map-of-string-list/index.ts"),
+    "utf-8"
+  );
+  expect(output).toMatchSnapshot();
+});
+
 test("reset and input name conflicts", async () => {
   const code = new CodeMaker();
   const workdir = fs.mkdtempSync(path.join(os.tmpdir(), "name-conflict.test"));
@@ -493,4 +519,55 @@ test("reset and input name conflicts", async () => {
     "utf-8"
   );
   expect(output).toMatchSnapshot();
+});
+
+test("list of list attributes", async () => {
+  const code = new CodeMaker();
+  const workdir = fs.mkdtempSync(
+    path.join(os.tmpdir(), "list-list-object.test")
+  );
+  const spec = JSON.parse(
+    fs.readFileSync(
+      path.join(__dirname, "fixtures", "list-list-object.test.fixture.json"),
+      "utf-8"
+    )
+  );
+  new TerraformProviderGenerator(code, spec).generateAll();
+  await code.save(workdir);
+
+  const output = fs.readFileSync(
+    path.join(workdir, "providers/test/complex/index.ts"),
+    "utf-8"
+  );
+  expect(output).toMatchSnapshot();
+});
+
+test("list of list of strings", async () => {
+  const code = new CodeMaker();
+  const workdir = fs.mkdtempSync(
+    path.join(os.tmpdir(), "list-list-string.test")
+  );
+  const spec = JSON.parse(
+    fs.readFileSync(
+      path.join(__dirname, "fixtures", "list-list-string.test.fixture.json"),
+      "utf-8"
+    )
+  );
+  new TerraformProviderGenerator(code, spec).generateAll();
+  await code.save(workdir);
+
+  // const resourceOutput = fs.readFileSync(
+  //   path.join(workdir, "providers/test/airbyte-connection/index.ts"),
+  //   "utf-8"
+  // );
+  // expect(resourceOutput).toMatchSnapshot();
+
+  const datasourceOutput = fs.readFileSync(
+    path.join(
+      workdir,
+      "providers/test/data-airbyte-source-schema-catalog/index.ts"
+    ),
+    "utf-8"
+  );
+  expect(datasourceOutput).toMatchSnapshot();
 });

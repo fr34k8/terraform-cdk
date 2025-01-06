@@ -1,5 +1,5 @@
 ---
-page_title: Unit Tests
+page_title: Unit Tests - CDK for Terraform
 description: Write assertions and snapshot tests for your CDK for Terraform application.
 ---
 
@@ -21,15 +21,17 @@ If you would like to add testing to an existing project, refer the following res
   ```
 
 - **Python:** Follow the [Get Started guide](https://docs.pytest.org/en/7.1.x/getting-started.html) for pytest. The assertions for CDKTF are available in the `cdktf` package under `Testing`.
-- **Java:** Follow the [Using JUnit documentation](https://maven.apache.org/plugins-archives/maven-surefire-plugin-2.12.4/examples/junit.html). The assertions for CDKTF specific are available in the `cdktf` package under `Testing`.
+- **Java:** Follow the [Using JUnit documentation](https://docs.gradle.org/current/userguide/java_testing.html). The assertions for CDKTF specific are available in the `cdktf` package under `Testing`.
 - **C#:** Follow the [Getting Started with xUnit.net guide](https://xunit.net/docs/getting-started/netcore/cmdline). The assertions for CDKTF are available in the `cdktf` package under `Testing`.
 - **Go:** Follow the [Add a Test guide](https://go.dev/doc/tutorial/add-a-test) in the Go documentation. The assertions for CDKTF specific are available in the `cdktf` package under `Testing`.
 
 ### Write Assertions
 
-The following Typescript example uses `Testing.synthScope` to test a part of the application. This creates a scope to test a subset of the application and returns a JSON string representing the synthesized HCL-JSON. Then it uses custom matchers to verify the code acts as intended.
+The following Typescript example uses `Testing.synth` to test a part of the application. Given the desired scope to test, a JSON string representing the synthesized HCL-JSON is returned. Then the custom assertions under `Testing` in the cdktf package can be used to verify the code acts as intended. `Testing.synth` can test the `Stack` that extends the `TerraformStack`.
 
-The other examples use `Testing.synth` to test a part of the application. Given the desired scope to test, a JSON string representing the synthesized HCL-JSON is returned. Then the custom assertions under `Testing` in the cdktf package can be used to verify the code acts as intended.
+The other examples use `Testing.synthScope` to test a part of the application. This creates a scope to test a subset of the application and returns a JSON string representing the synthesized HCL-JSON. Then it uses custom matchers to verify the code acts as intended. `Testing.synthScope` can test the `Constructs` that extends the `IConstruct`.
+
+-> **Note**: CDK for Terraform v0.20 introduces support for a `Testing.synthHcl` function. However, that is not compatible with other assertions, like `toHaveResourceWithProperties` etc. and should not be used.
 
 Examples in
 
@@ -37,6 +39,8 @@ Examples in
 - `toHaveResourceWithProperties`: Checks if a certain resource exists with all properties passed
 - `toHaveDataSource`: Checks if a certain data source exists
 - `toHaveDataSourceWithProperties`: Checks if a certain data source exists with all properties passed
+- `toHaveProvider`: Checks if a certain provider exists
+- `toHaveProviderWithProperties`: Checks if a certain provider exists with all properties passed
 
 <CodeTabs>
 
@@ -48,19 +52,21 @@ import MyApplicationsAbstraction from "../app"; // Could be a class extending fr
 
 describe("Unit testing using assertions", () => {
   it("should contain a container", () => {
-    expect(
-      Testing.synthScope((scope) => {
-        new MyApplicationsAbstraction(scope, "my-app", {});
-      })
-    ).toHaveResource(Container);
+    const app = Testing.app();
+    const stack = new MyApplicationsAbstraction(app, "my-app", {});
+    const synthesized = Testing.synth(stack);
+
+    expect(synthesized).toHaveResource(Container);
   });
 
   it("should use an ubuntu image", () => {
-    expect(
-      Testing.synthScope((scope) => {
-        new MyApplicationsAbstraction(scope, "my-app", {});
-      })
-    ).toHaveResourceWithProperties(Image, { name: "ubuntu:latest" });
+    const app = Testing.app();
+    const stack = new MyApplicationsAbstraction(app, "my-app", {});
+    const synthesized = Testing.synth(stack);
+
+    expect(synthesized).toHaveResourceWithProperties(Image, {
+      name: "ubuntu:latest",
+    });
   });
 });
 ```
@@ -159,14 +165,14 @@ import (
 	"github.com/aws/jsii-runtime-go"
 )
 
-var stack = NewMyApplicationsAbstraction(cdktf.Assertions_App(nil), "stack")
-var synth = cdktf.Assertions_Synth(stack)
+var stack = NewMyApplicationsAbstraction(cdktf.Testing_App(nil), "stack")
+var synth = cdktf.Testing_Synth(stack)
 
 func TestShouldContainContainer(t *testing.T){
-	assertion := cdktf.Assertions_ToHaveResource(synth, container.Container_TfResourceType())
+	assertion := cdktf.Testing_ToHaveResource(synth, container.Container_TfResourceType())
 
 	if !*assertion  {
-		t.Error(assertion.Message())
+		t.Error("Assertion Failed")
 	}
 }
 
@@ -174,10 +180,10 @@ func TestShouldUseUbuntuImage(t *testing.T){
 	properties := map[string]interface{}{
 		"name": "ubuntu:latest",
 	}
-	assertion := cdktf.Assertions_ToHaveResourceWithProperties(synth, image.Image_TfResourceType(), &properties)
+	assertion := cdktf.Testing_ToHaveResourceWithProperties(synth, image.Image_TfResourceType(), &properties)
 
 	if !*assertion  {
-		t.Error(assertion.Message())
+		t.Error("Assertion Failed")
 	}
 }
 ```
@@ -208,9 +214,9 @@ describe("Unit testing using snapshots", () => {
 
 ### Integration with Terraform
 
-You can produce invalid Terraform configuration if you are using escape hatches in your CDK for Terraform application. You may use an escape hatch when setting up a [remote backend](/cdktf/concepts/remote-backends) or when [overriding resource attributes](/cdktf/concepts/resources#escape-hatch)
+You can produce invalid Terraform configuration if you are using escape hatches in your CDK for Terraform application. You may use an escape hatch when setting up a [remote backend](/terraform/cdktf/concepts/remote-backends) or when [overriding resource attributes](/terraform/cdktf/concepts/resources#escape-hatch)
 
-To test this, you can assert that [`terraform validate`](/cli/commands/validate) or [`terraform plan`](/cli/commands/plan) run successfully on all or part of your application before running `cdktf plan` or `cdktf deploy`.
+To test this, you can assert that [`terraform validate`](/terraform/cli/commands/validate) or [`terraform plan`](/terraform/cli/commands/plan) run successfully on all or part of your application before running `cdktf plan` or `cdktf deploy`.
 
 Currently only Typescript is capable of testing for successful plans, while all languages are capable of testing for validity of the Terraform produced.
 
@@ -314,7 +320,7 @@ func TestCheckValidity(t *testing.T){
 	assertion := cdktf.Testing_ToBeValidTerraform(cdktf.Testing_FullSynth(stack))
 
 	if !*assertion  {
-		t.Error(assertion.Message())
+		t.Error("Assertion Failed")
 	}
 }
 ```

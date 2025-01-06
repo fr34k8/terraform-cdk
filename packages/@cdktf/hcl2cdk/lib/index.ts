@@ -3,10 +3,10 @@
 import { parse } from "@cdktf/hcl2json";
 import {
   isRegistryModule,
-  ProviderSchema,
   TerraformProviderGenerator,
   CodeMaker,
 } from "@cdktf/provider-generator";
+
 import * as t from "@babel/types";
 import prettier from "prettier";
 import * as path from "path";
@@ -17,21 +17,24 @@ import * as rosetta from "jsii-rosetta";
 import * as z from "zod";
 
 import { schema } from "./schema";
-import { findUsedReferences } from "./expressions";
+import { findUsedReferences } from "./references";
 import {
   backendToExpression,
-  cdktfImport,
   gen,
   local,
   moduleImports,
   modules,
   output,
   provider,
-  providerImports,
   resource,
   variable,
+  wrapCodeInConstructor,
+  addImportForCodeContainer,
+  buildImports,
+  generateConfigType,
+  imports,
 } from "./generation";
-import { TerraformResourceBlock, Scope } from "./types";
+import { TerraformResourceBlock, ProgramScope } from "./types";
 import {
   forEachProvider,
   forEachGlobal,
@@ -40,8 +43,16 @@ import {
 } from "./iteration";
 import { getProviderRequirements } from "./provider";
 import { logger } from "./utils";
-
-export { setLogger } from "./utils";
+import { FQPN } from "@cdktf/provider-schema";
+import { attributeNameToCdktfName } from "./generation";
+import {
+  replaceCsharpImports,
+  replaceGoImports,
+  replaceJavaImports,
+  replacePythonImports,
+} from "./jsii-rosetta-workarounds";
+import { ProviderSchema } from "@cdktf/commons";
+import { forEachImport } from "./iteration";
 
 export const CODE_MARKER = "// define resources here";
 
@@ -79,16 +90,15 @@ export async function parseProviderRequirements(hcl: string) {
 
 export async function convertToTypescript(
   hcl: string,
-  providerSchema: ProviderSchema
+  providerSchema: ProviderSchema,
+  codeContainer: string
 ) {
   logger.debug("Converting to typescript");
   const plan = await getParsedHcl(hcl);
 
-  logger.debug(`Parsed HCL: ${JSON.stringify(plan, null, 2)}`);
-
   // Each key in the scope needs to be unique, therefore we save them in a set
   // Each variable needs to be unique as well, we save them in a record so we can identify if two variables are the same
-  const scope: Scope = {
+  const scope: ProgramScope = {
     providerSchema,
     providerGenerator: Object.keys(
       providerSchema.provider_schemas || {}
@@ -97,11 +107,15 @@ export async function convertToTypescript(
         new CodeMaker(),
         providerSchema
       );
-      providerGenerator.buildResourceModels(fqpn);
+      providerGenerator.buildResourceModels(fqpn as FQPN); // can't use that type on the keys yet, since we are not on TS >=4.4 yet :sadcat:
       return { ...carry, [fqpn]: providerGenerator };
     }, {}),
     constructs: new Set<string>(),
     variables: {},
+    hasTokenBasedTypeCoercion: false,
+    nodeIds: [],
+    importables: [],
+    topLevelConfig: {},
   };
 
   const graph = new DirectedGraph<{
@@ -115,7 +129,12 @@ export async function convertToTypescript(
   // We need to use a function here because the same node has different representation based on if it's referenced by another one
   const nodeMap: Record<
     string,
-    (g: typeof graph) => Promise<Array<t.Statement | t.VariableDeclaration>>
+    {
+      code: (
+        g: typeof graph
+      ) => Promise<Array<t.Statement | t.VariableDeclaration>>;
+      value: unknown;
+    }
   > = {
     ...forEachProvider(scope, plan.provider, provider),
     ...forEachGlobal(scope, "var", plan.variable, variable),
@@ -130,6 +149,7 @@ export async function convertToTypescript(
     ),
     ...forEachGlobal(scope, "out", plan.output, output),
     ...forEachGlobal(scope, "module", plan.module, modules),
+    ...forEachImport(scope, "import", plan.import, imports),
     ...forEachNamespaced(scope, plan.resource, resource),
     ...forEachNamespaced(scope, plan.data, resource, "data"),
   };
@@ -137,11 +157,12 @@ export async function convertToTypescript(
   // Add all nodes to the dependency graph so we can detect if an edge is added for an unknown link
   Object.entries(nodeMap).forEach(([key, value]) => {
     logger.debug(`Adding node '${key}' to graph`);
-    graph.addNode(key, { code: value });
+    graph.addNode(key, value);
   });
 
   // Finding references becomes easier of the to be referenced ids are already known
   const nodeIds = Object.keys(nodeMap);
+  scope.nodeIds = nodeIds;
   async function addEdges(id: string, value: TerraformResourceBlock) {
     (await findUsedReferences(nodeIds, value)).forEach((ref) => {
       if (
@@ -157,6 +178,12 @@ export async function convertToTypescript(
           );
         }
 
+        // The graph should have no self-references
+        if (id === ref.referencee.id) {
+          logger.debug(`Skipping self-reference for ${id}`);
+          return;
+        }
+
         logger.debug(`Adding edge from ${ref.referencee.id} to ${id}`);
         graph.addDirectedEdge(ref.referencee.id, id, { ref });
       }
@@ -166,7 +193,7 @@ export async function convertToTypescript(
   // We recursively inspect each resource value to find references to other values
   // We add these to a dependency graph so that the programming code has the right order
   async function addGlobalEdges(
-    _scope: Scope,
+    _scope: ProgramScope,
     _key: string,
     id: string,
     value: TerraformResourceBlock
@@ -174,7 +201,7 @@ export async function convertToTypescript(
     await addEdges(id, value);
   }
   async function addProviderEdges(
-    _scope: Scope,
+    _scope: ProgramScope,
     _key: string,
     id: string,
     value: TerraformResourceBlock
@@ -182,7 +209,7 @@ export async function convertToTypescript(
     await addEdges(id, value);
   }
   async function addNamespacedEdges(
-    _scope: Scope,
+    _scope: ProgramScope,
     _type: string,
     _key: string,
     id: string,
@@ -208,7 +235,7 @@ export async function convertToTypescript(
       ...forEachGlobal(scope, "module", plan.module, addGlobalEdges),
       ...forEachNamespaced(scope, plan.resource, addNamespacedEdges),
       ...forEachNamespaced(scope, plan.data, addNamespacedEdges, "data"),
-    }).map((addEdgesToGraph) => addEdgesToGraph(graph))
+    }).map(({ code: addEdgesToGraph }) => addEdgesToGraph(graph))
   );
 
   logger.debug(`Graph: ${JSON.stringify(graph, null, 2)}`);
@@ -256,6 +283,16 @@ export async function convertToTypescript(
     );
   } while (nodesToVisit.length > 0 && nodesVisitedThisIteration != 0);
 
+  if (nodesToVisit.length > 0) {
+    throw new Error(
+      `There are ${
+        nodesToVisit.length
+      } terraform elements that could not be visited. 
+      This is likely due to a cycle in the dependency graph. 
+      These nodes are: ${nodesToVisit.join(", ")}`
+    );
+  }
+
   logger.debug(
     `${nodesToVisit.length} unvisited nodes: ${nodesToVisit.join(", ")}`
   );
@@ -263,7 +300,7 @@ export async function convertToTypescript(
   const backendExpressions = (
     await Promise.all(
       plan.terraform?.map((terraform) =>
-        backendToExpression(scope, terraform.backend, nodeIds)
+        backendToExpression(scope, terraform.backend)
       ) || [Promise.resolve([])]
     )
   ).reduce((carry, item) => [...carry, ...item], []);
@@ -299,21 +336,6 @@ export async function convertToTypescript(
     `Found these modules: ${JSON.stringify(moduleRequirements, null, 2)}`
   );
 
-  // Variables, Outputs, and Backends are defined in the CDKTF project so we need to import from it
-  // If none are used we don't want to leave a stray import
-  const hasBackend = plan.terraform?.some(
-    (tf) => Object.keys(tf.backend || {}).length > 0
-  );
-  const hasPlanOrOutputOrTerraformRemoteState =
-    Object.keys({
-      ...plan.variable,
-      ...plan.output,
-      ...(plan.data?.terraform_remote_state || {}),
-    }).length > 0;
-
-  const cdktfImports =
-    hasBackend || hasPlanOrOutputOrTerraformRemoteState ? [cdktfImport] : [];
-
   if (Object.keys(plan.variable || {}).length > 0 && expressions.length > 0) {
     expressions[0] = t.addComment(
       expressions[0],
@@ -332,21 +354,10 @@ You can read more about this at https://cdk.tf/variables`
     )}`
   );
 
-  const providers = providerImports(Object.keys(providerRequirements));
-  if (providers.length > 0) {
-    providers[0] = t.addComment(
-      providers[0],
-      "leading",
-      `Provider bindings are generated by running cdktf get.
-See https://cdk.tf/provider-generation for more details.`
-    );
-  }
-
-  logger.debug(`Using these providers: ${JSON.stringify(providers, null, 2)}`);
-
   // We add a comment if there are providers with missing schema information
   const providersLackingSchema = Object.keys(providerRequirements).filter(
     (providerName) =>
+      providerName !== "terraform" &&
       !Object.keys(providerSchema.provider_schemas || {}).some((schemaName) =>
         schemaName.endsWith(providerName)
       )
@@ -356,6 +367,7 @@ See https://cdk.tf/provider-generation for more details.`
       providersLackingSchema.length
     } providers lack schema information: ${providersLackingSchema.join(", ")}`
   );
+
   if (providersLackingSchema.length > 0) {
     expressions[0] = t.addComment(
       expressions[0],
@@ -367,21 +379,47 @@ For a more precise conversion please use the --provider flag in convert.`
     );
   }
 
+  // Always add constructs
+  scope.importables.push({
+    constructName: "Construct",
+    provider: "constructs",
+  });
+
+  if (scope.hasTokenBasedTypeCoercion) {
+    scope.importables.push({
+      constructName: "Token",
+      provider: "cdktf",
+    });
+  }
+
+  // Add specific import for codeContainer
+  addImportForCodeContainer(scope, codeContainer);
+  const constructImports = buildImports(scope.importables);
+
+  const code = [...(backendExpressions || []), ...expressions];
+  const configTypeName =
+    Object.keys(scope.topLevelConfig).length > 0 ? "MyConfig" : undefined;
+
+  const classConfig = configTypeName
+    ? [generateConfigType(configTypeName, scope.topLevelConfig)]
+    : [];
+
   // We split up the generated code so that users can have more control over what to insert where
   return {
+    // TODO: Remove imports and code because rosetta won't be able to translate them
     all: await gen([
-      ...cdktfImports,
-      ...providers,
+      ...constructImports,
       ...moduleImports(plan.module),
-      ...(backendExpressions || []),
-      ...expressions,
+      ...classConfig,
+      wrapCodeInConstructor(
+        codeContainer,
+        code,
+        "MyConvertedCode",
+        configTypeName
+      ),
     ]),
-    imports: await gen([
-      ...cdktfImports,
-      ...providers,
-      ...moduleImports(plan.module),
-    ]),
-    code: await gen([...(backendExpressions || []), ...expressions]),
+    imports: await gen([...constructImports, ...moduleImports(plan.module)]),
+    code: await gen(code),
     providers: Object.entries(providerRequirements).map(([source, version]) =>
       version === "*" ? source : `${source}@${version}`
     ),
@@ -398,37 +436,99 @@ For a more precise conversion please use the --provider flag in convert.`
 }
 
 type File = { contents: string; fileName: string };
-const translations = {
-  typescript: (file: File) => file.contents,
-  python: (file: File) =>
-    rosetta.translateTypeScript(file, new rosetta.PythonVisitor()).translation,
-  java: (file: File) =>
-    rosetta.translateTypeScript(file, new rosetta.JavaVisitor()).translation,
-  csharp: (file: File) =>
-    rosetta.translateTypeScript(file, new rosetta.CSharpVisitor()).translation,
+const translators = {
+  python: {
+    visitor: () => new rosetta.PythonVisitor(),
+    postTranslationMutation: replacePythonImports,
+  },
+  java: {
+    visitor: () => new rosetta.JavaVisitor(),
+    postTranslationMutation: replaceJavaImports,
+  },
+  csharp: {
+    visitor: () => new rosetta.CSharpVisitor(),
+    postTranslationMutation: replaceCsharpImports,
+  },
+  go: {
+    visitor: () => new rosetta.GoVisitor(),
+    postTranslationMutation: replaceGoImports,
+  },
 };
 
+function translatorForLanguage(language: keyof typeof translators) {
+  return (file: File, throwOnTranslationError: boolean) => {
+    const { visitor, postTranslationMutation } = translators[language];
+    const { translation, diagnostics } = rosetta.translateTypeScript(
+      file,
+      visitor(),
+      throwOnTranslationError ? { includeCompilerDiagnostics: true } : {}
+    );
+
+    if (
+      throwOnTranslationError &&
+      diagnostics.filter((diag) => diag.isError).length > 0
+    ) {
+      logger.debug(`Could not translate TS to ${language}:\n${file.contents}`);
+      throw new Error(
+        `Could not translate TS to ${language}: ${diagnostics
+          .map((diag) => diag.formattedMessage)
+          .join("\n")}`
+      );
+    }
+
+    return postTranslationMutation(translation);
+  };
+}
+
 type ConvertOptions = {
-  language: keyof typeof translations;
+  /**
+   * The language to convert to
+   */
+  language: keyof typeof translators | "typescript";
+  /**
+   * The provider schema to use for conversion
+   */
   providerSchema: ProviderSchema;
+  /**
+   * The base class to extend from. Defaults to `constructs.Construct`
+   */
+  codeContainer?: string;
+  /**
+   * Whether to throw an error if the translation fails
+   * Defaults to false
+   */
+  throwOnTranslationError?: boolean;
 };
 
 export async function convert(
   hcl: string,
-  { language, providerSchema }: ConvertOptions
+  {
+    language,
+    providerSchema,
+    throwOnTranslationError = false,
+    codeContainer = "cdktf.TerraformStack",
+  }: ConvertOptions
 ) {
   const fileName = "terraform.tf";
-  const translater = translations[language];
+  const translater =
+    language === "typescript"
+      ? (file: File, _throwOnTranslationError: boolean) => file.contents
+      : translatorForLanguage(language);
 
   if (!translater) {
     throw new Error("Unsupported language used: " + language);
   }
-  const tsCode = await convertToTypescript(hcl, providerSchema);
+
+  const tsCode = await convertToTypescript(hcl, providerSchema, codeContainer);
+
   return {
     ...tsCode,
-    all: translater({ fileName, contents: tsCode.all }),
-    imports: translater({ fileName, contents: tsCode.imports }),
-    code: translater({ fileName, contents: tsCode.code }),
+    all: translater(
+      { fileName, contents: tsCode.all },
+      throwOnTranslationError
+    ),
+    imports: translater({ fileName, contents: tsCode.imports }, false),
+    code: translater({ fileName, contents: tsCode.code }, false),
     stats: { ...tsCode.stats, language },
   };
 }
@@ -481,4 +581,4 @@ export async function convertProject(
   };
 }
 
-export { isRegistryModule };
+export { isRegistryModule, attributeNameToCdktfName };

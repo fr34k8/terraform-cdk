@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -23,6 +26,8 @@ namespace MyCompany.MyApp
                 Reqnum = 123,
                 Reqbool = true
             });
+
+            new OptionalAttributeResource(this, "null", new OptionalAttributeResourceConfig { Bool = Token.NullValue() });
 
             var res = new OptionalAttributeResource(this, "test", new OptionalAttributeResourceConfig { });
             var list = new ListBlockResource(this, "list", new ListBlockResourceConfig {

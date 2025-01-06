@@ -1,6 +1,6 @@
 // Copyright (c) HashiCorp, Inc
 // SPDX-License-Identifier: MPL-2.0
-import { TestDriver } from "../../test-helper";
+import { TestDriver, onlyJson } from "../../test-helper";
 import * as path from "path";
 import * as fs from "fs";
 
@@ -14,7 +14,7 @@ describe("iterators integration test", () => {
     console.log(driver.workingDirectory);
   });
 
-  test("properly synthesizes", async () => {
+  onlyJson("properly synthesizes", async () => {
     await driver.synth();
 
     const stack = driver.synthesizedStack("test-iterators");
@@ -33,12 +33,12 @@ describe("iterators integration test", () => {
       "each"
     );
 
-    expect(stack.output("testlisttype")).toEqual(
-      '${[ for key, val in toset(var.pets): {name = val["name"], age = val["age"]}]}'
+    expect(stack.output("test-list-type")).toEqual(
+      '${[ for key, val in toset(var.pets): {"name" = val.name, "age" = val.age}]}'
     );
-    expect(stack.output("testnestedlisttype")).toHaveProperty(
+    expect(stack.output("test-nested-list-type")).toHaveProperty(
       "nested.in.an.object",
-      '${[ for key, val in toset(var.pets): {name = val["name"], age = val["age"]}]}'
+      '${[ for key, val in toset(var.pets): {"name" = val.name, "age" = val.age}]}'
     );
 
     // tests that .dynamic() can also be passed to nested blocks
@@ -47,8 +47,8 @@ describe("iterators integration test", () => {
       "topology_request.required.dynamic.topology.content",
       {
         segments: {
-          rack: '${each.value["rack"]}',
-          zone: '${each.value["zone"]}',
+          rack: "${each.value.rack}",
+          zone: "${each.value.zone}",
         },
       }
     );
@@ -60,6 +60,17 @@ describe("iterators integration test", () => {
       "topology_request.required.dynamic.topology.iterator",
       "each"
     );
+
+    expect(stack2.byId("record")).toHaveProperty(
+      "for_each",
+      "${{ for key, val in tolist(aws_acm_certificate.cert.domain_validation_options): val.domain_name => val }}"
+    );
+    expect(stack2.byId("record")).toHaveProperty("name", "${each.value.name}");
+  });
+
+  test("non-synth stack is valid Terraform", async () => {
+    const out = await driver.validate("test-iterators-synth-only");
+    expect(out).toContain("Success! The configuration is valid.");
   });
 
   test("apply produces the correct result for outputs", async () => {

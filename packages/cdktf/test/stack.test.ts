@@ -7,8 +7,8 @@ import {
   Testing,
   TerraformOutput,
   LocalBackend,
-} from "cdktf/lib";
-import { TerraformModule } from "cdktf/lib/terraform-module";
+} from "../lib";
+import { TerraformModule } from "../lib/terraform-module";
 import { TestProvider } from "./helper";
 import { Construct } from "constructs";
 
@@ -101,7 +101,7 @@ test("stack validation returns error when provider is missing", () => {
   const errors = stack.node.validate();
 
   expect(errors).toEqual([
-    `Found resources without a matching provider construct. Please make sure to add provider constructs [e.g. new RandomProvider(...)] to your stack for the following providers: test-provider`,
+    `Found resources without a matching provider construct. Please make sure to add provider constructs [e.g. new RandomProvider(...)] to your stack 'MyStack' for the following providers: test-provider`,
   ]);
 });
 
@@ -117,13 +117,18 @@ test("stack validation returns no error when provider is not set", () => {
   expect(errors).toEqual([]);
 });
 
-test("getting Stack for TerraformBackend which was added to root app returns friendly error", () => {
+test("getting Stack for construct which was added to root app returns friendly error", () => {
   const app = Testing.stubVersion(new App({ stackTraces: false }));
   new TerraformStack(app, "MyStack");
 
-  expect(() => new LocalBackend(app, {})).toThrowErrorMatchingInlineSnapshot(
-    `"No stack could be identified for the construct at path 'backend'. You seem to have passed your root App as scope to a TerraformBackend construct. Pass a stack as scope to your backend instead."`
-  );
+  expect(() => new LocalBackend(app, {})).toThrowErrorMatchingInlineSnapshot(`
+    "No stack could be identified for the construct at path 'backend'. You seem to have passed your root App as scope to a construct. Pass a stack (inheriting from TerraformStack) as scope to your construct instead.
+
+    You can only use constructs as part of a TerraformStack.
+
+    To learn more about Constructs vs. TerraformStacks, refer to: https://developer.hashicorp.com/terraform/cdktf/concepts/constructs#:~:text=Constructs%20vs.%20Stacks
+    "
+  `);
 });
 
 describe("output id map", () => {
@@ -187,15 +192,15 @@ describe("output id map", () => {
     const { outputs } = tf["//"];
 
     expect(outputs).toMatchInlineSnapshot(`
-      Object {
-        "MyStack": Object {
-          "MyCustomConstruct": Object {
-            "output": "MyStack_MyCustomConstruct_output_E06F5428",
-            "output1": "MyStack_MyCustomConstruct_output1_55CB8869",
+      {
+        "MyStack": {
+          "MyCustomConstruct": {
+            "output": "MyCustomConstruct_output_AFA0492F",
+            "output1": "MyCustomConstruct_output1_11AB14A2",
           },
-          "MyCustomOtherConstruct": Object {
-            "output": "MyStack_MyCustomOtherConstruct_output_BCB14270",
-            "output1": "MyStack_MyCustomOtherConstruct_output1_BEDB5493",
+          "MyCustomOtherConstruct": {
+            "output": "MyCustomOtherConstruct_output_D26A811A",
+            "output1": "MyCustomOtherConstruct_output1_9A3A64D2",
           },
         },
       }

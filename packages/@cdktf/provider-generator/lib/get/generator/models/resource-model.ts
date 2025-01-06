@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: MPL-2.0
 import { toSnakeCase } from "codemaker";
 import path from "path";
-import { Schema } from "../provider-schema";
+import { FQPN, parseFQPN, ProviderName } from "@cdktf/provider-schema";
 import { AttributeModel } from "./attribute-model";
 import { Struct, ConfigStruct } from "./struct";
+import { Schema } from "@cdktf/commons";
 
 // Limit is 1200 to prevent stack size error.
 // Could increase now that calculation is more accurate;
@@ -19,7 +20,7 @@ interface ResourceModelOptions {
   filePath: string;
   attributes: AttributeModel[];
   structs: Struct[];
-  provider: string;
+  fqpn: FQPN;
   schema: Schema;
   terraformSchemaType: string;
   configStructName: string;
@@ -31,10 +32,16 @@ export class ResourceModel {
   public filePath: string;
   public terraformType: string;
   public baseName: string;
-  public provider: string;
+  public provider: ProviderName;
+  public fqpn: FQPN;
   public providerVersionConstraint?: string;
   public providerVersion?: string;
   public terraformProviderSource?: string;
+  /*
+   * usually same as provider, but can be overridden if user picks a different name
+   * to be able to use two providers with the same name
+   */
+  public terraformProviderName: string;
   public fileName: string;
   public attributes: AttributeModel[];
   public schema: Schema;
@@ -52,7 +59,9 @@ export class ResourceModel {
     this.baseName = options.baseName;
     this.attributes = options.attributes;
     this.schema = options.schema;
-    this.provider = options.provider;
+    this.fqpn = options.fqpn;
+    this.provider = parseFQPN(options.fqpn).name;
+    this.terraformProviderName = this.provider;
     this.fileName = options.fileName;
     this._structs = options.structs;
     this.terraformSchemaType = options.terraformSchemaType;
@@ -88,11 +97,13 @@ export class ResourceModel {
   }
 
   public get linkToDocs(): string {
-    if (this.isProvider)
-      return `https://www.terraform.io/docs/providers/${this.provider}`;
-    return `https://www.terraform.io/docs/providers/${this.provider}/${
-      this.isDataSource ? "d" : "r"
-    }/${this.terraformDocName}`;
+    const { hostname, namespace, name } = parseFQPN(this.fqpn);
+    const version = this.providerVersion || "latest";
+    const base = `https://${hostname}/providers/${namespace}/${name}/${version}/docs`;
+    if (this.isProvider) return base;
+    if (this.isDataSource)
+      return `${base}/data-sources/${this.terraformDocName}`;
+    return `${base}/resources/${this.terraformDocName}`;
   }
 
   public get isProvider(): boolean {
@@ -113,7 +124,7 @@ export class ResourceModel {
 
   public get terraformResourceType(): string {
     return this.isProvider
-      ? this.provider
+      ? this.terraformProviderName
       : this.isDataSource
       ? this.terraformType.replace(/^data_/, "")
       : this.terraformType;

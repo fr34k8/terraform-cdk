@@ -1,10 +1,15 @@
+/**
+ * Copyright (c) HashiCorp, Inc.
+ * SPDX-License-Identifier: MPL-2.0
+ */
+
 import React from "react";
 import { Text, Box } from "ink";
-import { NestedTerraformOutputs } from "../../../../lib/output";
 import {
+  NestedTerraformOutputs,
   TerraformOutput,
   isTerraformOutput,
-} from "../../../../lib/models/terraform";
+} from "@cdktf/cli-core";
 
 export interface OutputsConfig {
   outputs: NestedTerraformOutputs;

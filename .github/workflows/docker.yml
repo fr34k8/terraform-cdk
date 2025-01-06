@@ -9,24 +9,25 @@ on:
       - "website/**"
       - "cdk.tf/**"
       - "tools/update-github-project-board/**"
+  workflow_dispatch: {}
 
 jobs:
   build-docker-image:
     if: github.repository == 'hashicorp/terraform-cdk'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v1
+        uses: docker/setup-buildx-action@c47758b77c9736f4b2ef4073d4d51994fabfe349 # v3.7.1
       - name: Cache Docker layers
-        uses: actions/cache@v2
+        uses: actions/cache@6849a6489940f00c2f30c0fb92c6274307ccb58a # v4.1.2
         with:
           path: /tmp/.buildx-cache
           key: ${{ runner.os }}-buildx-${{ hashFiles('/Dockerfile', '.terraform.versions.json') }}
           restore-keys: |
             ${{ runner.os }}-buildx-
       - name: Login to DockerHub
-        uses: docker/login-action@v1
+        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3.3.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -34,14 +35,22 @@ jobs:
         run: |
           DEFAULT_TERRAFORM_VERSION=$(cat .terraform.versions.json | jq -r '.default')
           AVAILABLE_TERRAFORM_VERSIONS=$(cat .terraform.versions.json | jq -r '.available | join(" ")')
-          echo "::set-output name=default::$DEFAULT_TERRAFORM_VERSION"
-          echo "::set-output name=available::$AVAILABLE_TERRAFORM_VERSIONS"
+          echo "default=$DEFAULT_TERRAFORM_VERSION" >> $GITHUB_OUTPUT
+          echo "available=$AVAILABLE_TERRAFORM_VERSIONS" >> $GITHUB_OUTPUT
+      - id: cdktf-version
+        run: |
+          CDKTF_VERSION=$(cat package.json | jq -r '.version')
+          echo "cdktf=$CDKTF_VERSION" >> $GITHUB_OUTPUT
+      - id: git-sha
+        run: |
+          GIT_SHA=$(git rev-parse HEAD)
+          echo "git-sha=$GIT_SHA" >> $GITHUB_OUTPUT
       - name: Build and push
-        uses: docker/build-push-action@v2
+        uses: docker/build-push-action@4f58ea79222b3b9dc2c8bbdd6debcef730109a75 # v6.9.0
         with:
           pull: true
           push: true
-          tags: hashicorp/jsii-terraform:latest
+          tags: hashicorp/jsii-terraform:latest,hashicorp/jsii-terraform:${{ steps.cdktf-version.outputs.cdktf }},hashicorp/jsii-terraform:${{ steps.cdktf-version.outputs.cdktf }}-${{ steps.git-sha.outputs.git-sha }}
           cache-from: type=local,src=/tmp/.buildx-cache
           cache-to: type=local,dest=/tmp/.buildx-cache
           build-args: |

@@ -1,12 +1,12 @@
 // Copyright (c) HashiCorp, Inc
 // SPDX-License-Identifier: MPL-2.0
 import * as yargs from "yargs";
-import { config as cfg } from "@cdktf/provider-generator";
+import { readConfigSync } from "@cdktf/commons";
 import { requireHandlers } from "./helper/utilities";
-import { Errors } from "../../lib/errors";
+import { Errors } from "@cdktf/commons";
 import { BaseCommand } from "./helper/base-command";
 
-const config = cfg.readConfigSync();
+const config = readConfigSync();
 
 class Command extends BaseCommand {
   public readonly command = "deploy [stacks...]";
@@ -75,6 +75,38 @@ class Command extends BaseCommand {
         desc: "Forwards value as the `-parallelism` flag to Terraform. By default, the this flag is not forwarded to Terraform. Note: This flag is not supported by remote / cloud backend",
         // Setting value to negative will prevent it from being forwarded to terraform as an argument
         default: -1,
+      })
+      // The presence of this flag is automatically picked up by `chalk` as well which
+      // causes colors to be disabled too for output that the cdktf-cli itself colors.
+      .option("no-color", {
+        type: "boolean",
+        default: process.env.FORCE_COLOR === "0",
+        required: false,
+        desc: "Disables terminal formatting sequences in the output.",
+      })
+      .option("migrate-state", {
+        type: "boolean",
+        default: false,
+        required: false,
+        desc: "Pass this flag after switching state backends to approve a state migration for all targeted stacks",
+      })
+      .option("var", {
+        type: "array",
+        default: [],
+        required: false,
+        desc: "Set a value for one of the input variables in the stack or stacks to apply. Use this option more than once to set more than one variable.",
+      })
+      .option("var-file", {
+        type: "array",
+        default: [],
+        required: false,
+        desc: "Load variable values from the given file, in addition to the default files terraform.tfvars and *.auto.tfvars. Use this option more than once to include more than one variables file.",
+      })
+      .option("skip-synth", {
+        type: "boolean",
+        default: false,
+        required: false,
+        desc: "Skip synthesis of the application, assume the synthesized Terraform code is already present and up to date",
       })
       .showHelpOnFail(true);
 

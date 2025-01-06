@@ -10,10 +10,6 @@ import { LocalBackend } from "./backends/local-backend";
 import { ref } from "./tfExpression";
 import { TerraformOutput } from "./terraform-output";
 import { TerraformRemoteState } from "./terraform-remote-state";
-import {
-  EXCLUDE_STACK_ID_FROM_LOGICAL_IDS,
-  ALLOW_SEP_CHARS_IN_LOGICAL_IDS,
-} from "./features";
 import { makeUniqueId } from "./private/unique";
 import { IStackSynthesizer } from "./synthesize/types";
 import { StackSynthesizer } from "./synthesize/synthesizer";
@@ -22,6 +18,28 @@ const STACK_SYMBOL = Symbol.for("cdktf/TerraformStack");
 import { ValidateProviderPresence } from "./validations";
 import { App } from "./app";
 import { TerraformBackend } from "./terraform-backend";
+import { TerraformResourceTargets } from "./terraform-resource-targets";
+import { TerraformResource } from "./terraform-resource";
+import {
+  renderDatasource,
+  renderModule,
+  renderMoved,
+  renderOutput,
+  renderProvider,
+  renderResource,
+  renderTerraform,
+  renderLocals,
+  renderVariable,
+  renderImport,
+  cleanForMetadata,
+} from "./hcl/render";
+import {
+  noStackForConstruct,
+  stackContainsDisallowedChar,
+  stackHasCircularDependency,
+  stackIdContainsWhitespace,
+  stackValidationFailure,
+} from "./errors";
 
 // eslint-disable-next-line @typescript-eslint/ban-types
 type StackIdentifier = string;
@@ -33,16 +51,14 @@ export interface TerraformStackMetadata {
   readonly stackName: string;
   readonly version: string;
   readonly backend: string;
+  readonly cloud?: string;
 }
 
 // eslint-disable-next-line jsdoc/require-jsdoc
 function throwIfIdIsGlobCharacter(str: string): void {
-  const err = (char: string) =>
-    `Can not create Terraform stack with id "${str}". It contains a glob character: "${char}"`;
-
   ["*", "?", "[", "]", "{", "}", "!"].forEach((char) => {
     if (str.includes(char)) {
-      throw new Error(err(char));
+      throw stackContainsDisallowedChar(str, char);
     }
   });
 }
@@ -50,9 +66,7 @@ function throwIfIdIsGlobCharacter(str: string): void {
 // eslint-disable-next-line jsdoc/require-jsdoc
 function throwIfIdContainsWhitespace(str: string): void {
   if (/\s/.test(str)) {
-    throw new Error(
-      `Can not create TerraformStack with id "${str}". It contains a whitespace character.`
-    );
+    throw stackIdContainsWhitespace(str);
   }
 }
 
@@ -65,6 +79,7 @@ export class TerraformStack extends Construct {
     {};
   public synthesizer: IStackSynthesizer;
   public dependencies: TerraformStack[] = [];
+  public moveTargets: TerraformResourceTargets = new TerraformResourceTargets();
 
   constructor(scope: Construct, id: string) {
     super(scope, id);
@@ -74,7 +89,9 @@ export class TerraformStack extends Construct {
     this.cdktfVersion = this.node.tryGetContext("cdktfVersion");
     this.synthesizer = new StackSynthesizer(
       this,
-      process.env.CDKTF_CONTINUE_SYNTH_ON_ERROR_ANNOTATIONS !== undefined
+      process.env.CDKTF_CONTINUE_SYNTH_ON_ERROR_ANNOTATIONS !== undefined,
+      process.env.SYNTH_HCL_OUTPUT === "true" ||
+        process.env.SYNTH_HCL_OUTPUT === "1"
     );
     Object.defineProperty(this, STACK_SYMBOL, { value: true });
     this.node.addValidation(new ValidateProviderPresence(this));
@@ -97,20 +114,14 @@ export class TerraformStack extends Construct {
 
       if (!node.scope) {
         let hint = "";
-        if (
-          construct.node.scope === c &&
-          App.isApp(c) &&
-          TerraformBackend.isBackend(construct)
-        ) {
+        if (construct.node.scope === c && App.isApp(c)) {
           // the scope of the originally passed construct equals the construct c
           // which has no scope (i.e. has no parent construct) and c is an App
           // and our construct is a Backend
-          hint = `. You seem to have passed your root App as scope to a TerraformBackend construct. Pass a stack as scope to your backend instead.`;
+          hint = `. You seem to have passed your root App as scope to a construct. Pass a stack (inheriting from TerraformStack) as scope to your construct instead.`;
         }
 
-        throw new Error(
-          `No stack could be identified for the construct at path '${construct.node.path}'${hint}`
-        );
+        throw noStackForConstruct(construct.node.path, hint);
       }
 
       return _lookup(node.scope);
@@ -192,20 +203,10 @@ export class TerraformStack extends Construct {
       ? tfElement.cdktfStack
       : this;
 
-    let stackIndex;
-    if (node.tryGetContext(EXCLUDE_STACK_ID_FROM_LOGICAL_IDS)) {
-      stackIndex = node.scopes.indexOf(stack);
-    } else {
-      stackIndex = 0;
-    }
+    const stackIndex = node.scopes.indexOf(stack);
 
     const components = node.scopes.slice(stackIndex + 1).map((c) => c.node.id);
-    return components.length > 0
-      ? makeUniqueId(
-          components,
-          node.tryGetContext(ALLOW_SEP_CHARS_IN_LOGICAL_IDS)
-        )
-      : "";
+    return components.length > 0 ? makeUniqueId(components) : "";
   }
 
   public allProviders(): TerraformProvider[] {
@@ -217,13 +218,12 @@ export class TerraformStack extends Construct {
     return backends[0] || new LocalBackend(this, {});
   }
 
-  public toTerraform(): any {
-    const tf = {};
-
+  public toHclTerraform(): { [key: string]: any } {
     const metadata: TerraformStackMetadata = {
       version: this.cdktfVersion,
       stackName: this.node.id,
       backend: "local", // overwritten by backend implementations if used
+      cloud: undefined, // overwritten by cloud and remote backend implementations
       ...(Object.keys(this.rawOverrides).length > 0
         ? { overrides: { stack: Object.keys(this.rawOverrides) } }
         : {}),
@@ -237,7 +237,137 @@ export class TerraformStack extends Construct {
     }
 
     const outputs: OutputIdMap = elements.reduce((carry, item) => {
-      if (!TerraformOutput.isTerrafromOutput(item)) {
+      if (!TerraformOutput.isTerraformOutput(item)) {
+        return carry;
+      }
+
+      deepMerge(
+        carry,
+        item.node.path.split("/").reduceRight((innerCarry, part) => {
+          if (Object.keys(innerCarry).length === 0) {
+            return { [part]: item.friendlyUniqueId };
+          }
+          return { [part]: innerCarry };
+        }, {})
+      );
+
+      return carry;
+    }, {});
+
+    const tf = {};
+    const fragments = elements.map((e) => resolve(this, e.toHclTerraform()));
+    const locals: { locals?: any } = {};
+
+    const tfMeta = {
+      "//": {
+        metadata,
+        outputs,
+      },
+    };
+    const hclFragments = fragments
+      .map((frag) => {
+        let res = "";
+        if (frag.resource) {
+          const { hcl, metadata } = renderResource(frag.resource);
+          deepMerge(tfMeta, metadata);
+          res = [res, hcl].join("\n");
+        }
+
+        if (frag.data) {
+          const { hcl, metadata } = renderDatasource(frag.data);
+          deepMerge(tfMeta, metadata);
+          res = [res, hcl].join("\n");
+        }
+
+        if (frag.provider) {
+          deepMerge(tf, frag);
+          res = [res, renderProvider(frag.provider)].join("\n\n");
+        }
+
+        if (frag.terraform) {
+          deepMerge(tf, frag);
+        }
+
+        if (frag.module) {
+          const { hcl, metadata } = renderModule(frag.module);
+          deepMerge(tfMeta, metadata);
+          res = [res, hcl].join("\n");
+        }
+
+        if (frag.output) {
+          res = [res, renderOutput(frag.output)].join("\n\n");
+        }
+
+        if (frag.moved) {
+          res = [res, renderMoved(frag.moved)].join("\n\n");
+        }
+
+        if (frag.import) {
+          res = [res, renderImport(frag.import)].join("\n\n");
+        }
+
+        if (frag.locals) {
+          deepMerge(locals, frag);
+        }
+
+        if (frag.variable) {
+          res = [res, renderVariable(frag.variable)].join("\n\n");
+        }
+
+        return res;
+      })
+      .filter((frag) => frag !== undefined);
+
+    deepMerge(tf, this.rawOverrides);
+    const terraformBlock = (tf as any)?.terraform;
+
+    let terraformBlockHcl = "";
+    if (terraformBlock) {
+      terraformBlockHcl = renderTerraform(terraformBlock);
+      deepMerge(tfMeta, { terraform: cleanForMetadata(terraformBlock) });
+    }
+
+    let localsHcl = "";
+    if (locals) {
+      localsHcl = renderLocals(locals.locals);
+
+      if (localsHcl) {
+        // Hacky way to add a newline between the terraform block and the locals block
+        localsHcl = "\n\n" + localsHcl;
+      }
+    }
+
+    return {
+      hcl: resolve(
+        this,
+        [terraformBlockHcl, localsHcl, ...hclFragments].join("")
+      ),
+      metadata: resolve(this, tfMeta),
+    };
+  }
+
+  public toTerraform(): any {
+    const tf = {};
+
+    const metadata: TerraformStackMetadata = {
+      version: this.cdktfVersion,
+      stackName: this.node.id,
+      backend: "local", // overwritten by backend implementations if used
+      cloud: undefined, // overwritten by cloud and remote backend implementations
+      ...(Object.keys(this.rawOverrides).length > 0
+        ? { overrides: { stack: Object.keys(this.rawOverrides) } }
+        : {}),
+    };
+
+    const elements = terraformElements(this);
+
+    const metadatas = elements.map((e) => resolve(this, e.toMetadata()));
+    for (const meta of metadatas) {
+      deepMerge(metadata, meta);
+    }
+
+    const outputs: OutputIdMap = elements.reduce((carry, item) => {
+      if (!TerraformOutput.isTerraformOutput(item)) {
         return carry;
       }
 
@@ -311,9 +441,7 @@ export class TerraformStack extends Construct {
 
   public addDependency(dependency: TerraformStack) {
     if (dependency.dependsOn(this)) {
-      throw new Error(
-        `Can not add dependency ${dependency} to ${this} since it would result in a loop`
-      );
+      throw stackHasCircularDependency(this, dependency);
     }
 
     if (this.dependencies.includes(dependency)) {
@@ -337,10 +465,17 @@ export class TerraformStack extends Construct {
       const errorList = errors
         .map((e) => `[${e.source.node.path}] ${e.message}`)
         .join("\n  ");
-      throw new Error(
-        `Validation failed with the following errors:\n  ${errorList}`
-      );
+      throw stackValidationFailure(errorList);
     }
+  }
+
+  public hasResourceMove(): boolean {
+    return terraformElements(this).some((e) => {
+      if (TerraformResource.isTerraformResource(e) && e.hasResourceMove()) {
+        return true;
+      }
+      return false;
+    });
   }
 }
 

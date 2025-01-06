@@ -1,4 +1,7 @@
 #!/usr/bin/env python
+# Copyright (c) HashiCorp, Inc.
+# SPDX-License-Identifier: MPL-2.0
+
 from constructs import Construct
 from cdktf import App, TerraformStack, Testing, TerraformOutput, Fn, LocalBackend
 from imports.null.provider import NullProvider
@@ -24,7 +27,7 @@ class MyStack(TerraformStack):
             }
         })
         TerraformOutput(self, "computed", value=Fn.element(
-            Fn.merge_lists([{"id": resource.id}, {"value": "123"}]), 1))
+            Fn.merge([{"id": resource.id}, {"value": "123"}]), 1))
 
 
 app = Testing.stub_version(App(stack_traces=False))

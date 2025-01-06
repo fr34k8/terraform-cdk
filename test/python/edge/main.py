@@ -1,7 +1,10 @@
 #!/usr/bin/env python
+# Copyright (c) HashiCorp, Inc.
+# SPDX-License-Identifier: MPL-2.0
+
 import os
 from constructs import Construct
-from cdktf import App, Fn, TerraformStack, Token, TerraformOutput, TerraformIterator
+from cdktf import App, Fn, TerraformStack, Token, TerraformOutput, TerraformIterator, Token
 import imports.edge as edge
 
 # Using references to resource attributes as resource arguments
@@ -15,6 +18,9 @@ class ReferenceStack(TerraformStack):
                                    reqnum=123,
                                    reqbool=True
                                    )
+
+        edge.optional_attribute_resource.OptionalAttributeResource(
+            self, "null", bool=Token.null_value())
 
         res = edge.optional_attribute_resource.OptionalAttributeResource(
             self, "test")

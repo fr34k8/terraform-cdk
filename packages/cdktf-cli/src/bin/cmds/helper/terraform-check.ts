@@ -1,14 +1,12 @@
 // Copyright (c) HashiCorp, Inc
 // SPDX-License-Identifier: MPL-2.0
-import { TerraformCli } from "../../../lib/models/terraform-cli";
+import { TerraformCli, SynthesizedStack } from "@cdktf/cli-core";
+import { logger } from "@cdktf/commons";
 import * as semver from "semver";
-import { SynthesizedStack } from "../../../lib/synth-stack";
 import { existsSync } from "fs-extra";
 import * as path from "path";
-import { AbortController } from "node-abort-controller"; // polyfill until we update to node 14
-import { logger } from "../../../lib/logging";
 
-const MIN_SUPPORTED_VERSION = "1.0.0";
+const MIN_SUPPORTED_VERSION = "1.2.0";
 const VERSION_REGEXP = /Terraform v\d+.\d+.\d+/;
 
 export const getTerraformVersion = async (): Promise<string | null> => {
@@ -22,6 +20,7 @@ export const getTerraformVersion = async (): Promise<string | null> => {
       constructPath: "",
       content: "",
       synthesizedStackPath: "",
+      stackMetadataPath: "",
       annotations: [],
       dependencies: [],
     };
@@ -65,7 +64,7 @@ export const terraformCheck = async (): Promise<void> => {
         console.warn(warningMessage);
       }
     }
-  } catch (e) {
+  } catch (e: any) {
     console.error(e.message);
     process.exit(1);
   }

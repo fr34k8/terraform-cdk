@@ -20,6 +20,15 @@ import {
 } from "./encoding";
 import { TokenMap } from "./token-map";
 import { Token } from "../token";
+import {
+  cannotResolveFunction,
+  constructsCannotBeResolved,
+  encodedListTokenInScalarStringContext,
+  encodedMapTokenInScalarNumberContext,
+  encodedMapTokenInScalarStringContext,
+  mapKeyMustResolveToString,
+  unableToResolveCircularReference,
+} from "../../errors";
 
 // This file should not be exported to consumers, resolving should happen through Construct.resolve()
 
@@ -65,6 +74,8 @@ export function resolve(obj: any, options: IResolveOptions): any {
       preparing: options.preparing,
       scope: options.scope,
       suppressBraces: options.previousContext?.suppressBraces,
+      ignoreEscapes: options.previousContext?.ignoreEscapes,
+      warnEscapes: options.previousContext?.warnEscapes,
       iteratorContext: options.previousContext?.iteratorContext,
       registerPostProcessor(pp) {
         postProcessor = pp;
@@ -90,9 +101,7 @@ export function resolve(obj: any, options: IResolveOptions): any {
 
   // protect against cyclic references by limiting depth.
   if (prefix.length > 200) {
-    throw new Error(
-      "Unable to resolve object tree with circular reference. Path: " + pathName
-    );
+    throw unableToResolveCircularReference(pathName);
   }
 
   //
@@ -116,9 +125,7 @@ export function resolve(obj: any, options: IResolveOptions): any {
   //
 
   if (typeof obj === "function") {
-    throw new Error(
-      `Trying to resolve a non-data object. Only token are supported for lazy evaluation. Path: ${pathName}. Object: ${obj}`
-    );
+    throw cannotResolveFunction(pathName, obj);
   }
 
   //
@@ -127,23 +134,24 @@ export function resolve(obj: any, options: IResolveOptions): any {
   if (typeof obj === "string") {
     // If this is a "list element" Token, it should never occur by itself in string context
     if (TokenString.forListToken(obj).test()) {
-      throw new Error(
-        "Found an encoded list token string in a scalar string context. Use 'Fn.element(list, 0)' (not 'list[0]') to extract elements from token lists"
-      );
+      throw encodedListTokenInScalarStringContext();
     }
 
     if (
       obj === Token.STRING_MAP_TOKEN_VALUE ||
       obj === Token.ANY_MAP_TOKEN_VALUE
     ) {
-      throw new Error(
-        "Found an encoded map token in a scalar string context. Use 'Fn.lookup(map, key, default)' (not 'map[key]') to extract values from token maps."
-      );
+      throw encodedMapTokenInScalarStringContext();
     }
 
     let str: string = obj;
 
-    const tokenStr = TokenString.forString(str);
+    const context = makeContext()[0];
+    const tokenStr = TokenString.forString(
+      str,
+      !context.ignoreEscapes,
+      context.warnEscapes
+    );
     if (tokenStr.test()) {
       const fragments = tokenStr.split(tokenMap.lookupToken.bind(tokenMap));
       str = options.resolver.resolveString(fragments, makeContext()[0]);
@@ -156,12 +164,8 @@ export function resolve(obj: any, options: IResolveOptions): any {
         return TokenMap.instance().lookupNumberToken(parseFloat(id));
       });
 
-      str = fragments
-        .mapTokens({
-          mapToken: (resolvable: IResolvable) =>
-            makeContext()[0].resolve(resolvable),
-        })
-        .join(new StringConcat());
+      const context = makeContext()[0];
+      str = fragments.mapTokens(context).join(new StringConcat());
     }
 
     return str;
@@ -172,9 +176,7 @@ export function resolve(obj: any, options: IResolveOptions): any {
   //
   if (typeof obj === "number") {
     if (obj === Token.NUMBER_MAP_TOKEN_VALUE) {
-      throw new Error(
-        "Found an encoded map token in a scalar number context. Use 'Fn.lookup(map, key, default)' (not 'map[key]') to extract values from token maps."
-      );
+      throw encodedMapTokenInScalarNumberContext();
     }
 
     return resolveNumberToken(obj, makeContext()[0]);
@@ -231,18 +233,14 @@ export function resolve(obj: any, options: IResolveOptions): any {
   // mistake somewhere and resolve will get into an infinite loop recursing into
   // child.parent <---> parent.children
   if (isConstruct(obj)) {
-    throw new Error("Trying to resolve() a Construct at " + pathName);
+    throw constructsCannotBeResolved(pathName);
   }
 
   const result: any = {};
   for (const key of Object.keys(obj)) {
     const resolvedKey = makeContext()[0].resolve(key);
     if (typeof resolvedKey !== "string") {
-      throw new Error(
-        `"${key}" is used as the key in a map so must resolve to a string, but it resolves to: ${JSON.stringify(
-          resolvedKey
-        )}`
-      );
+      throw mapKeyMustResolveToString(pathName, key, resolvedKey);
     }
 
     const value = makeContext(key)[0].resolve(obj[key]);

@@ -1,5 +1,6 @@
 // Copyright (c) HashiCorp, Inc
 // SPDX-License-Identifier: MPL-2.0
+import { expectNotGloballyAccessible, jestNotInstantiated } from "../../errors";
 import {
   getToHaveDataSourceWithProperties,
   toBeValidTerraform,
@@ -7,6 +8,7 @@ import {
 } from "../matchers";
 import {
   getToHaveResourceWithProperties,
+  getToHaveProviderWithProperties,
   TerraformConstructor,
   MatcherReturnJest,
   returnMatcherToJest,
@@ -27,6 +29,13 @@ declare global {
         dataSourceConstructor: TerraformConstructor,
         properties: Record<string, any>
       ): R;
+
+      toHaveProvider(providerConstructor: TerraformConstructor): R;
+      toHaveProviderWithProperties(
+        providerConstructor: TerraformConstructor,
+        properties: Record<string, any>
+      ): R;
+
       toBeValidTerraform(): R;
       toPlanSuccessfully(): R;
     }
@@ -55,16 +64,14 @@ function jestPassEvaluation(
         .arrayContaining([expect.objectContaining(assertedProperties)])
         .asymmetricMatch(items);
     } else {
-      throw new Error(
-        "expect is not defined, jest was not propely instantiated"
-      );
+      throw jestNotInstantiated();
     }
   }
 }
 
 export function setupJest() {
   if (!("expect" in global)) {
-    throw new Error("setupJest called, but expect is not globally accessible");
+    throw expectNotGloballyAccessible();
   }
 
   const expect = (global as any).expect as JestExpect;
@@ -117,6 +124,32 @@ export function setupJest() {
         getToHaveDataSourceWithProperties(jestPassEvaluation)(
           received,
           dataSourceConstructor,
+          properties
+        )
+      );
+    },
+
+    toHaveProvider(
+      received: string,
+      providerConstructor: TerraformConstructor
+    ) {
+      return returnMatcherToJest(
+        getToHaveProviderWithProperties(jestPassEvaluation)(
+          received,
+          providerConstructor,
+          {}
+        )
+      );
+    },
+    toHaveProviderWithProperties(
+      received: string,
+      providerConstructor: TerraformConstructor,
+      properties: Record<string, any>
+    ) {
+      return returnMatcherToJest(
+        getToHaveProviderWithProperties(jestPassEvaluation)(
+          received,
+          providerConstructor,
           properties
         )
       );

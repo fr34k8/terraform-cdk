@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package main
 
 import (
@@ -42,7 +45,7 @@ func NewMyStack(scope constructs.Construct, id string) cdktf.TerraformStack {
 		},
 	})
 
-	auth := gkeAuth.NewGkeAuth(stack, jsii.String("auth"), &gkeAuth.GkeAuthOptions{
+	auth := gkeAuth.NewGkeAuth(stack, jsii.String("auth"), &gkeAuth.GkeAuthConfig{
 		ClusterName: cluster.Name(),
 		Location:    cluster.Location(),
 		ProjectId:   cluster.Project(),

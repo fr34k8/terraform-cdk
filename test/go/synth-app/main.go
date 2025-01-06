@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package main
 
 import (
@@ -10,7 +13,7 @@ import (
 
 func NewMyStack(scope constructs.Construct, id string) cdktf.TerraformStack {
 	stack := cdktf.NewTerraformStack(scope, &id)
-	cdktf.NewLocalBackend(stack, &cdktf.LocalBackendProps{
+	cdktf.NewLocalBackend(stack, &cdktf.LocalBackendConfig{
 		Path: jsii.String("terraform.tfstate"),
 	})
 
@@ -22,7 +25,7 @@ func NewMyStack(scope constructs.Construct, id string) cdktf.TerraformStack {
 }
 
 func main() {
-	app := cdktf.Testing_StubVersion(cdktf.NewApp(&cdktf.AppOptions{StackTraces: jsii.Bool(false)}))
+	app := cdktf.Testing_StubVersion(cdktf.NewApp(&cdktf.AppConfig{StackTraces: jsii.Bool(false)}))
 
 	NewMyStack(app, "go-simple")
 

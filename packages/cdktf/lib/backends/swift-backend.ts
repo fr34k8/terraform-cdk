@@ -8,13 +8,19 @@ import {
   DataTerraformRemoteStateConfig,
 } from "../terraform-remote-state";
 
-// eslint-disable-next-line jsdoc/require-jsdoc
+/**
+ * @deprecated CDK for Terraform no longer supports the swift backend. Terraform deprecated swift in v1.2.3 and removed it in v1.3.
+ */
 export class SwiftBackend extends TerraformBackend {
-  constructor(scope: Construct, private readonly props: SwiftBackendProps) {
+  constructor(scope: Construct, private readonly props: SwiftBackendConfig) {
     super(scope, "backend", "swift");
   }
 
   protected synthesizeAttributes(): { [name: string]: any } {
+    return keysToSnakeCase({ ...this.props });
+  }
+
+  protected synthesizeHclAttributes(): { [name: string]: any } {
     return keysToSnakeCase({ ...this.props });
   }
 
@@ -27,7 +33,9 @@ export class SwiftBackend extends TerraformBackend {
   }
 }
 
-// eslint-disable-next-line jsdoc/require-jsdoc
+/**
+ * @deprecated CDK for Terraform no longer supports the swift backend. Terraform deprecated swift in v1.2.3 and removed it in v1.3.
+ */
 export class DataTerraformRemoteStateSwift extends TerraformRemoteState {
   constructor(
     scope: Construct,
@@ -38,7 +46,10 @@ export class DataTerraformRemoteStateSwift extends TerraformRemoteState {
   }
 }
 
-export interface SwiftBackendProps {
+/**
+ * @deprecated CDK for Terraform no longer supports the swift backend. Terraform deprecated swift in v1.2.3 and removed it in v1.3.
+ */
+export interface SwiftBackendConfig {
   readonly authUrl?: string;
   readonly cloud?: string;
   readonly container: string;
@@ -68,6 +79,9 @@ export interface SwiftBackendProps {
   readonly expireAfter?: string;
 }
 
+/**
+ * @deprecated CDK for Terraform no longer supports the swift backend. Terraform deprecated swift in v1.2.3 and removed it in v1.3.
+ */
 export interface DataTerraformRemoteStateSwiftConfig
   extends DataTerraformRemoteStateConfig,
-    SwiftBackendProps {}
+    SwiftBackendConfig {}

@@ -1,12 +1,24 @@
 name: Provider Integration Tests
 on:
-  pull_request:
-    paths:
-      - "packages/@cdktf/provider-generator/**"
-      - "test/provider-tests/**"
+  workflow_call:
+    inputs:
+      skip_setup:
+        description: Skip the version and build step and use parent
+        default: false
+        required: false
+        type: boolean
+      concurrency_group_prefix:
+        default: pr
+        required: false
+        type: string
+      terraform_version:
+        description: Version of Terraform to use
+        default: 1.6.5
+        type: string
+        required: false
 
 concurrency:
-  group: provider-${{ github.head_ref }}
+  group: ${{ inputs.concurrency_group_prefix }}-provider-integration-${{ github.head_ref }}
   cancel-in-progress: true
 
 jobs:
@@ -21,25 +33,47 @@ jobs:
     timeout-minutes: 60
 
     steps:
-      - uses: actions/checkout@v2
-      - name: Get yarn cache directory path
-        id: yarn-cache-dir-path
-        run: echo "::set-output name=dir::$(yarn cache dir)"
-      - uses: actions/cache@v2
-        id: yarn-cache # use this to check for `cache-hit` (`steps.yarn-cache.outputs.cache-hit != 'true'`)
-        with:
-          path: ${{ steps.yarn-cache-dir-path.outputs.dir }}
-          key: ${{ runner.os }}-yarn-${{ hashFiles('**/yarn.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-yarn-
-      - name: installing dependencies and build
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: "Add Git safe.directory" # Go 1.18+ started embedding repo info in the build and e.g. building @cdktf/hcl2json fails without this
+        run: git config --global --add safe.directory /__w/terraform-cdk/terraform-cdk
+      - name: ensure correct user
+        run: chown -R root /__w/terraform-cdk
+      # Setup caches for yarn, and go
+      - name: Get cache directory paths
+        id: global-cache-dir-path
         run: |
-          yarn install
+          echo "yarn=$(yarn cache dir)" >> $GITHUB_OUTPUT
+          mkdir -p /usr/local/share/.cache/go
+          echo "go=/usr/local/share/.cache/go" >> $GITHUB_OUTPUT
+      - uses: actions/cache@6849a6489940f00c2f30c0fb92c6274307ccb58a # v4.1.2
+        with:
+          path: ${{ steps.global-cache-dir-path.outputs.yarn }}
+          key: yarn-${{ runner.os }}-${{ hashFiles('**/yarn.lock') }}-provider-integration
+          restore-keys: |
+            yarn-${{ runner.os }}-${{ hashFiles('**/yarn.lock') }}-
+            yarn-${{ runner.os }}-
+      - uses: actions/cache@6849a6489940f00c2f30c0fb92c6274307ccb58a # v4.1.2
+        with:
+          path: ${{ steps.global-cache-dir-path.outputs.go }}
+          key: go-${{ runner.os }}-${{ hashFiles('**/go.sum') }}-provider-integration
+          restore-keys: |
+            go-${{ runner.os }}-${{ hashFiles('**/go.sum') }}-
+            go-${{ runner.os }}-
+      - name: installing dependencies and build
+        if: ${{ !inputs.skip_setup }}
+        run: |
+          yarn install --frozen-lockfile --prefer-offline
           tools/align-version.sh "-dev.$GITHUB_RUN_ID"
           yarn build
           yarn package
+        env:
+          GOCACHE: ${{ steps.global-cache-dir-path.outputs.go }}
+      - name: install test dependencies to warm up cache for matrix jobs to use
+        run: |
+          cd test && yarn
       - name: Upload dist
-        uses: actions/upload-artifact@v2
+        if: ${{ !inputs.skip_setup }}
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
         with:
           name: dist
           path: dist
@@ -57,16 +91,40 @@ jobs:
       image: docker.mirror.hashicorp.services/hashicorp/jsii-terraform
     env:
       CHECKPOINT_DISABLE: "1"
-      TERRAFORM_VERSION: ${{ matrix.terraform }}
+      TERRAFORM_VERSION: ${{ inputs.terraform_version }}
+      TERRAFORM_BINARY_NAME: "terraform${{ inputs.terraform_version }}"
     timeout-minutes: 60
 
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Download dist
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
         with:
           name: dist
           path: dist
+      - name: ensure correct user
+        run: chown -R root /__w/terraform-cdk
+      - name: Get cache directory paths
+        id: global-cache-dir-path
+        run: |
+          echo "yarn=$(yarn cache dir)" >> $GITHUB_OUTPUT
+          mkdir -p /usr/local/share/.cache/terraform
+          echo "terraform=/usr/local/share/.cache/terraform" >> $GITHUB_OUTPUT
+      # Only restoring yarn caches as the dependencies are not indiviual to each matrix job
+      - uses: actions/cache/restore@6849a6489940f00c2f30c0fb92c6274307ccb58a # v4.1.2
+        with:
+          path: ${{ steps.global-cache-dir-path.outputs.yarn }}
+          key: yarn-${{ runner.os }}-${{ hashFiles('**/yarn.lock') }}-provider-integration
+          restore-keys: |
+            yarn-${{ runner.os }}-${{ hashFiles('**/yarn.lock') }}-
+            yarn-${{ runner.os }}-
+      - uses: actions/cache@6849a6489940f00c2f30c0fb92c6274307ccb58a # v4.1.2
+        with:
+          path: ${{ steps.global-cache-dir-path.outputs.terraform }}
+          # put matrix before provider-integration to not restore caches from other sibling matrix jobs
+          key: terraform-${{ runner.os }}-${{ inputs.terraform_version }}-matrix-provider-integration-${{ matrix.target }}
+          restore-keys: |
+            terraform-${{ runner.os }}-${{ inputs.terraform_version }}-
       - name: install test dependencies
         run: cd test && yarn
       - name: integration tests
@@ -74,36 +132,60 @@ jobs:
         env:
           TEST_TARGET: ${{ matrix.target }}
           NODE_OPTIONS: "--max-old-space-size=7168"
+          TF_PLUGIN_CACHE_DIR: ${{ steps.global-cache-dir-path.outputs.terraform }}
+          SYNTH_HCL_OUTPUT: ${{ matrix.hclOutput }}
 
   windows_provider:
     needs: prepare-provider-tests
-    runs-on: windows-2019
+    runs-on: windows-2022
     strategy:
       fail-fast: false
       matrix: ${{fromJSON(needs.prepare-provider-tests.outputs.tests)}}
     env:
       CHECKPOINT_DISABLE: "1"
-      TERRAFORM_VERSION: ${{ matrix.terraform }}
+      TERRAFORM_VERSION: ${{ inputs.terraform_version }}
     timeout-minutes: 60
 
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: HashiCorp - Setup Terraform
-        uses: hashicorp/setup-terraform@v1
+        uses: hashicorp/setup-terraform@633666f66e0061ca3b725c73b2ec20cd13a8fdd1
         with:
           terraform_wrapper: false
-          terraform_version: ${{ matrix.terraform }}
+          terraform_version: ${{ inputs.terraform_version }}
       - name: Install pipenv
         run: pip install pipenv
       - name: Install Go
-        uses: actions/setup-go@v2
+        uses: actions/setup-go@41dfa10bad2bb2ae585af6ee5bb4d7d973ad74ed # v5.1.0
         with:
           go-version: 1.16.x
       - name: Download dist
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
         with:
           name: dist
           path: dist
+      - name: Get cache directory paths
+        id: global-cache-dir-path
+        shell: bash
+        run: |
+          echo "yarn=$(yarn cache dir)" >> $GITHUB_OUTPUT
+          mkdir -p /usr/local/share/.cache/terraform
+          echo "terraform=/usr/local/share/.cache/terraform" >> $GITHUB_OUTPUT
+      # Only restoring yarn caches to save available cache storage size
+      - uses: actions/cache/restore@6849a6489940f00c2f30c0fb92c6274307ccb58a # v4.1.2
+        with:
+          path: ${{ steps.global-cache-dir-path.outputs.yarn }}
+          key: yarn-${{ runner.os }}-${{ hashFiles('**/yarn.lock') }}-provider-integration
+          restore-keys: |
+            yarn-${{ runner.os }}-${{ hashFiles('**/yarn.lock') }}-
+            yarn-${{ runner.os }}-
+      - uses: actions/cache@6849a6489940f00c2f30c0fb92c6274307ccb58a # v4.1.2
+        with:
+          path: ${{ steps.global-cache-dir-path.outputs.terraform }}
+          # put matrix before provider-integration to not restore caches from other sibling matrix jobs
+          key: terraform-${{ runner.os }}-${{ matrix.terraform }}-matrix-provider-integration-${{ matrix.target }}
+          restore-keys: |
+            terraform-${{ runner.os }}-${{ matrix.terraform }}-
       # tmp fix for https://github.com/npm/cli/issues/4980
       - name: update npm
         run: npm install -g npm@8.12.1
@@ -114,3 +196,5 @@ jobs:
         env:
           TEST_TARGET: ${{ matrix.target }}
           NODE_OPTIONS: "--max-old-space-size=7168"
+          TF_PLUGIN_CACHE_DIR: ${{ steps.global-cache-dir-path.outputs.terraform }}
+          SYNTH_HCL_OUTPUT: ${{ matrix.hclOutput }}

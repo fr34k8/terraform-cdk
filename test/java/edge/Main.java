@@ -1,3 +1,8 @@
+/*
+ * Copyright (c) HashiCorp, Inc.
+ * SPDX-License-Identifier: MPL-2.0
+ */
+
 package com.mycompany.app;
 
 import java.util.*;
@@ -21,6 +26,8 @@ class ReferenceStack extends TerraformStack {
                 .reqnum(123)
                 .reqbool(true)
                 .build();
+
+        OptionalAttributeResource.Builder.create(this, "null").bool(Token.nullValue()).build();
 
         List<ListBlockResourceReq> arrlist = new ArrayList<ListBlockResourceReq>();
         arrlist.add(ListBlockResourceReq.builder().reqbool(true).reqnum(1).reqstr("reqstr").build());

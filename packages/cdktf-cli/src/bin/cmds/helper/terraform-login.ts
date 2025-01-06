@@ -1,15 +1,22 @@
 // Copyright (c) HashiCorp, Inc
 // SPDX-License-Identifier: MPL-2.0
 import * as fs from "fs";
-import * as inquirer from "inquirer";
+import { confirm, password } from "@inquirer/prompts";
 import * as open from "open";
 import * as chalk from "chalk";
 import * as terraformCloudClient from "./terraform-cloud-client";
-import { logger } from "../../../lib/logging";
+import { Errors, logger } from "@cdktf/commons";
 
 const chalkColour = new chalk.Instance();
 const homedir = require("os").homedir();
 const terraformCredentialsFilePath = `${homedir}/.terraform.d/credentials.tfrc.json`;
+
+const nonIteractiveLoginWithNoTokenError = (invalid: boolean) =>
+  Errors.Usage(
+    `You are trying to use terraform init in a non-interactive mode while ${
+      invalid ? "having an invalid token for" : "not being logged in to"
+    }  Terraform Cloud. This can also happen when running cdktf convert against a project not using Typescript, since we need to create a temporary cdktf project for an accurate translation. Please run 'cdktf login' to log in.`
+  );
 
 export interface Hostname {
   token: string;
@@ -45,38 +52,41 @@ the following file for use by subsequent Terraform commands:
 
     let isLogin = false;
 
-    const { tfCloud } = await inquirer.prompt([
-      {
-        name: "tfCloud",
-        type: "confirm",
-        message:
-          "Do you want to continue with Terraform Cloud remote state management?",
-      },
-    ]);
+    const tfCloud = await confirm({
+      message:
+        "Do you want to continue with Terraform Cloud remote state management?",
+    });
 
     if (tfCloud) {
       isLogin = true;
-      this.openBrowser();
+      await this.openBrowser();
     }
 
     return isLogin;
   }
 
-  openBrowser() {
+  async openBrowser() {
     console.log(`\nopening webpage using your browser.....\n`);
     console.log(chalkColour`If the web browser didn't open the window automatically, you can go to the following url:
         {whiteBright ${this.terraformLoginURL}}\n`);
-    return open.default(this.terraformLoginURL);
+    try {
+      await open.default(this.terraformLoginURL, {
+        allowNonzeroExitCode: true,
+        wait: false, // Should remain false. Otherwise, it waits for the app (browser) to exit/quit, not just the window.
+      });
+    } catch (e) {
+      logger.debug(
+        `Ignored error while trying to open ${this.terraformLoginURL}`,
+        e
+      );
+    }
   }
 
   public async askForToken() {
-    const { token } = await inquirer.prompt([
-      {
-        name: "token",
-        message: `Token for ${this.tfeHostname} 🔑`,
-        type: "password",
-      },
-    ]);
+    const token = await password({
+      message: `Token for ${this.tfeHostname} 🔑`,
+      mask: "*",
+    });
     return token;
   }
 
@@ -144,7 +154,7 @@ the following file for use by subsequent Terraform commands:
     }
   }
 
-  public async askToLogin(): Promise<string> {
+  public async askToLogin(nonInteractive: boolean): Promise<string> {
     const hasToken = await this.checkIfTerraformCredentialsExist();
     const token: string | null = hasToken
       ? await this.getTokenFromTerraformCredentialsFile()
@@ -154,6 +164,10 @@ the following file for use by subsequent Terraform commands:
       return token;
     }
 
+    // if we are not interactive, we need to abort
+    if (nonInteractive) {
+      throw nonIteractiveLoginWithNoTokenError(Boolean(token));
+    }
     // we either have no token or not a valid one
     const shouldContinue = await this.askToContinue();
     if (shouldContinue) {

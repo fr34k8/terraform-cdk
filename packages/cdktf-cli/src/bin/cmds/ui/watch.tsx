@@ -1,6 +1,10 @@
-import { AbortController } from "node-abort-controller";
+/**
+ * Copyright (c) HashiCorp, Inc.
+ * SPDX-License-Identifier: MPL-2.0
+ */
+
 import React, { useEffect, useState } from "react";
-import { watch, WatchState } from "../../../lib/";
+import { watch, WatchState } from "@cdktf/cli-core";
 import { StreamView, WatchStatusBottomBar } from "./components";
 import { LogEntry } from "./hooks/cdktf-project";
 
@@ -61,7 +65,7 @@ export const Watch = ({
         parallelism,
         terraformParallelism,
       },
-      ac.signal,
+      ac.signal as any,
       (state) => {
         setCurrentState(state);
       }

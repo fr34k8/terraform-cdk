@@ -1,32 +1,49 @@
 // Copyright (c) HashiCorp, Inc
 // SPDX-License-Identifier: MPL-2.0
 import { Construct } from "constructs";
-import { keysToSnakeCase, deepMerge, terraformBinaryName } from "../util";
+import { keysToSnakeCase, deepMerge } from "../util";
 import { DataTerraformRemoteState } from "./remote-backend";
-import { Fn } from "../terraform-functions";
 import { TerraformRemoteState } from "../terraform-remote-state";
 import { TerraformBackend } from "../terraform-backend";
-import { ValidateBinaryVersion } from "../validations";
+import { ValidateTerraformVersion } from "../validations/validate-terraform-version";
+import { cloudBackendWorkspaceIsNotDefinedByName } from "../errors";
 
 /**
- * The Cloud Backend synthesizes a {@link https://www.terraform.io/cli/cloud/settings#the-cloud-block cloud block}.
+ * checks whether the given hostname belongs to tfc or (else) to tfe
+ * If no hostname is given, it will return tfc, as that's the default in backends.
+ * @param hostname e.g. app.terraform.io, app.terraform.io:80, tfe.myorg.org
+ * @returns "tfc" or "tfe"
+ */
+export function getHostNameType(hostname?: string): "tfc" | "tfe" {
+  if (!hostname) return "tfc"; // default is tfc when not passing a hostname to backends
+  return hostname.startsWith("app.terraform.io") ? "tfc" : "tfe";
+}
+
+/**
+ * The Cloud Backend synthesizes a {@link https://developer.hashicorp.com/terraform/cli/cloud/settings#the-cloud-block cloud block}.
  * The cloud block is a nested block within the top-level terraform settings block.
  * It specifies which Terraform Cloud workspaces to use for the current working directory.
  * The cloud block only affects Terraform CLI's behavior.
  * When Terraform Cloud uses a configuration that contains a cloud block - for example, when a workspace is configured to use a VCS provider directly - it ignores the block and behaves according to its own workspace settings.
  */
 export class CloudBackend extends TerraformBackend {
-  constructor(scope: Construct, private readonly props: CloudBackendProps) {
+  constructor(scope: Construct, private readonly props: CloudBackendConfig) {
     super(scope, "backend", "cloud");
 
     this.node.addValidation(
-      new ValidateBinaryVersion(
-        "terraform",
+      new ValidateTerraformVersion(
         ">=1.1",
-        `${terraformBinaryName} version`,
         `The cloud block is only supported for Terraform >=1.1. Please upgrade your Terraform version.`
       )
     );
+  }
+
+  public toHclTerraform(): any {
+    return {
+      terraform: {
+        cloud: deepMerge(this.synthesizeHclAttributes(), this.rawOverrides),
+      },
+    };
   }
 
   /**
@@ -36,6 +53,23 @@ export class CloudBackend extends TerraformBackend {
     return {
       terraform: {
         cloud: deepMerge(this.synthesizeAttributes(), this.rawOverrides),
+      },
+    };
+  }
+
+  public toMetadata() {
+    const cloud = getHostNameType(this.props.hostname);
+    return { ...super.toMetadata(), cloud };
+  }
+
+  protected synthesizeHclAttributes(): { [name: string]: any } {
+    return {
+      ...keysToSnakeCase(this.props),
+      workspaces: {
+        value: this.props.workspaces.toHclTerraform(),
+        isBlock: true,
+        type: "map",
+        storageClassType: "stringmap",
       },
     };
   }
@@ -63,22 +97,20 @@ export class CloudBackend extends TerraformBackend {
       });
     }
 
-    throw new Error(
-      "The Cloud backend only supports cross-stack references when the workspace is defined by name instead of by tags."
-    );
+    throw cloudBackendWorkspaceIsNotDefinedByName();
   }
 }
 
 /**
- * The Cloud Backend synthesizes a {@link https://www.terraform.io/cli/cloud/settings#the-cloud-block cloud block}.
+ * The Cloud Backend synthesizes a {@link https://developer.hashicorp.com/terraform/cli/cloud/settings#the-cloud-block cloud block}.
  * The cloud block is a nested block within the top-level terraform settings block.
  * It specifies which Terraform Cloud workspaces to use for the current working directory.
  * The cloud block only affects Terraform CLI's behavior.
  * When Terraform Cloud uses a configuration that contains a cloud block - for example, when a workspace is configured to use a VCS provider directly - it ignores the block and behaves according to its own workspace settings.
  *
- * https://www.terraform.io/cli/cloud/settings#arguments
+ * https://developer.hashicorp.com/terraform/cli/cloud/settings#arguments
  */
-export interface CloudBackendProps {
+export interface CloudBackendConfig {
   /**
    * The name of the organization containing the workspace(s) the current configuration should use.
    */
@@ -116,12 +148,24 @@ export abstract class CloudWorkspace {
  * You will only be able to use the workspace specified in the configuration with this working directory, and cannot manage workspaces from the CLI (e.g. terraform workspace select or terraform workspace new).
  */
 export class NamedCloudWorkspace extends CloudWorkspace {
-  public constructor(public name: string) {
+  public constructor(public name: string, public project?: string) {
     super();
   }
+
+  public toHclTerraform(): any {
+    return {
+      name: {
+        value: this.name,
+        type: "simple",
+        storageClassType: "string",
+      },
+    };
+  }
+
   public toTerraform(): any {
     return {
       name: this.name,
+      project: this.project,
     };
   }
 }
@@ -130,12 +174,24 @@ export class NamedCloudWorkspace extends CloudWorkspace {
  *  A set of Terraform Cloud workspace tags. You will be able to use this working directory with any workspaces that have all of the specified tags, and can use the terraform workspace commands to switch between them or create new workspaces. New workspaces will automatically have the specified tags. This option conflicts with name.
  */
 export class TaggedCloudWorkspaces extends CloudWorkspace {
-  public constructor(public tags: string[]) {
+  public constructor(public tags: string[], public project?: string) {
     super();
   }
+
+  public toHclTerraform(): any {
+    return {
+      tags: {
+        value: this.tags,
+        type: "list",
+        storageClassType: "stringList",
+      },
+    };
+  }
+
   public toTerraform(): any {
     return {
-      tags: Fn.toset(this.tags),
+      tags: this.tags,
+      project: this.project,
     };
   }
 }

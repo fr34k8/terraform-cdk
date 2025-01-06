@@ -1,3 +1,8 @@
+/*
+ * Copyright (c) HashiCorp, Inc.
+ * SPDX-License-Identifier: MPL-2.0
+ */
+
 import com.hashicorp.cdktf.Testing;
 import com.mycompany.app.Main;
 import com.hashicorp.cdktf.App;
@@ -7,6 +12,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import imports.docker.container.Container;
 import imports.docker.data_docker_image.DataDockerImage;
 import imports.docker.data_docker_network.DataDockerNetwork;
+import imports.docker.provider.DockerProvider;
 import imports.docker.config.Config;
 import java.util.HashMap;
 
@@ -21,7 +27,7 @@ public class MainTest {
 
     @Test
     void hasResourcePass() {
-        assertTrue(Testing.toHaveResource(synthesized, Container.TF_RESOURCE_TYPE) );
+        assertTrue(Testing.toHaveResource(synthesized, Container.TF_RESOURCE_TYPE));
     }
 
     @Test
@@ -31,7 +37,7 @@ public class MainTest {
                     {
                         put("dns_opts", new String[] { "1", "2", "3" });
                     }
-                }) );
+                }));
     }
 
     @Test
@@ -46,7 +52,7 @@ public class MainTest {
                     {
                         put("dns_opts", new String[] { "11", "22", "33" });
                     }
-                }) );
+                }));
     }
 
     @Test
@@ -66,7 +72,7 @@ public class MainTest {
 
     @Test
     void hasDataFail() {
-        assertFalse(Testing.toHaveDataSource(synthesized, DataDockerNetwork.TF_RESOURCE_TYPE) );
+        assertFalse(Testing.toHaveDataSource(synthesized, DataDockerNetwork.TF_RESOURCE_TYPE));
     }
 
     @Test
@@ -76,17 +82,22 @@ public class MainTest {
                     {
                         put("name", "wrong");
                     }
-                }) );
+                }));
     }
 
     @Test
-    void isValidTerrformPass() {
-        assertTrue(Testing.toBeValidTerraform(fullSynthesized) );
+    void hasProviderWithPropsPass() {
+        assertTrue(Testing.toHaveProvider(synthesized, DockerProvider.TF_RESOURCE_TYPE));
     }
 
     @Test
-    void isValidTerrformFail() {
-        assertFalse(Testing.toBeValidTerraform(fullSynthesizedInvalidTerraform) );
+    void isValidTerraformPass() {
+        assertTrue(Testing.toBeValidTerraform(fullSynthesized));
+    }
+
+    @Test
+    void isValidTerraformFail() {
+        assertFalse(Testing.toBeValidTerraform(fullSynthesizedInvalidTerraform));
     }
 
 }

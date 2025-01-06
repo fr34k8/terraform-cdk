@@ -1,6 +1,6 @@
 // Copyright (c) HashiCorp, Inc
 // SPDX-License-Identifier: MPL-2.0
-import { TestDriver } from "../../test-helper";
+import { TestDriver, onlyHcl, onlyJson } from "../../test-helper";
 import * as path from "path";
 import * as fs from "fs";
 
@@ -14,9 +14,16 @@ describe("full integration test", () => {
     driver.copyFolders("fixtures", "relative");
   });
 
-  test("synth", async () => {
+  onlyJson("synth", async () => {
     await driver.synth("fixed");
     expect(driver.synthesizedStack("fixed").toString()).toMatchSnapshot();
+  });
+
+  onlyHcl("hcl synth", async () => {
+    await driver.synth("fixed");
+    expect(
+      driver.synthesizedStackContentsRaw("fixed").toString()
+    ).toMatchSnapshot();
   });
 
   test("file asset copied", async () => {
@@ -25,7 +32,7 @@ describe("full integration test", () => {
       fs.readFileSync(
         path.resolve(
           driver.stackDirectory("fixed"),
-          "assets/localasset/hash/local-asset.txt"
+          "assets/local-asset/hash/local-asset.txt"
         ),
         "utf-8"
       )
@@ -69,7 +76,7 @@ describe("full integration test", () => {
     const stat = fs.statSync(
       path.resolve(
         driver.stackDirectory("fixed"),
-        "assets/zippedfixtures/hash/archive.zip"
+        "assets/zipped-fixtures/hash/archive.zip"
       )
     );
     expect(stat.isFile()).toBe(true);
@@ -81,7 +88,7 @@ describe("full integration test", () => {
       fs.readFileSync(
         path.resolve(
           driver.stackDirectory("fixed"),
-          "assets/relativeasset/hash/relative-asset.txt"
+          "assets/relative-asset/hash/relative-asset.txt"
         ),
         "utf-8"
       )

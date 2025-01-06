@@ -1,9 +1,10 @@
 // Copyright (c) HashiCorp, Inc
 // SPDX-License-Identifier: MPL-2.0
-import { IConstruct, IValidation, Node } from "constructs";
+import { IConstruct, IValidation } from "constructs";
 import { TerraformProvider } from "../terraform-provider";
 import { TerraformResource } from "../terraform-resource";
 import { TerraformDataSource } from "../terraform-data-source";
+import { TerraformStack } from "../terraform-stack";
 
 /**
  * A validation that is added by default, ensuring that all providers
@@ -32,7 +33,10 @@ export class ValidateProviderPresence implements IValidation {
       TerraformResource.isTerraformResource(node) ||
       TerraformDataSource.isTerraformDataSource(node)
     ) {
-      if (node.terraformGeneratorMetadata) {
+      if (
+        node.terraformGeneratorMetadata &&
+        node.terraformGeneratorMetadata.providerName !== "terraform"
+      ) {
         this.providerNames.add(node.terraformGeneratorMetadata.providerName);
       }
     }
@@ -41,7 +45,7 @@ export class ValidateProviderPresence implements IValidation {
       this.foundProviders.push(node);
     }
 
-    for (const child of Node.of(node).children) {
+    for (const child of node.node.children) {
       this.check(child);
     }
   }
@@ -61,10 +65,11 @@ export class ValidateProviderPresence implements IValidation {
     if (missingProviders.length === 0) {
       return [];
     } else {
+      const stack = TerraformStack.of(this.host);
       return [
-        `Found resources without a matching provider construct. Please make sure to add provider constructs [e.g. new RandomProvider(...)] to your stack for the following providers: ${missingProviders.join(
-          ", "
-        )}`,
+        `Found resources without a matching provider construct. Please make sure to add provider constructs [e.g. new RandomProvider(...)] to your stack '${
+          stack.node.id
+        }' for the following providers: ${missingProviders.join(", ")}`,
       ];
     }
   }

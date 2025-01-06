@@ -1,5 +1,9 @@
 // Copyright (c) HashiCorp, Inc
 // SPDX-License-Identifier: MPL-2.0
+import {
+  sourceOrTargetNotAnObject,
+  targetNotResolvableWithOverrides,
+} from "./errors";
 import { TerraformDynamicBlock } from "./terraform-dynamic-block";
 import { Tokenization } from "./tokens/token";
 
@@ -12,17 +16,16 @@ export const terraformBinaryName =
  */
 export function deepMerge(target: any, ...sources: any[]) {
   if (Tokenization.isResolvable(target) && sources.length > 0) {
-    throw new Error(
-      `Invalid usage. Target (${target.toString()}) can not be a resolvable token when overrides are specified. Please replace the value of the field you are overriding with a static value.`
-    );
+    throw targetNotResolvableWithOverrides(target.toString());
   }
 
   for (const source of sources) {
     if (typeof source !== "object" || typeof target !== "object") {
-      throw new Error(
-        `Invalid usage. Both source (${JSON.stringify(
-          source
-        )}) and target (${JSON.stringify(target)}) must be objects`
+      throw sourceOrTargetNotAnObject(
+        JSON.stringify(source),
+        typeof source,
+        JSON.stringify(target),
+        typeof target
       );
     }
 
@@ -90,7 +93,7 @@ export function keysToSnakeCase(object: any): any {
   }
   const keys = Object.keys(object);
   return keys.reduce((newObject: any, key: string) => {
-    if (key === "tags") {
+    if (key === "tags" || key === "environment") {
       newObject[key] = object[key];
       return newObject;
     }
@@ -107,6 +110,37 @@ export function keysToSnakeCase(object: any): any {
     newObject[snakeCase(key)] = value;
     return newObject;
   }, {});
+}
+
+/**
+ * dynamic attributes are located at a different position than normal block attributes
+ * This method detects them and moves them from .attributeName to .dynamic.attributeName
+ * It also invokes the .toTerraform() method on the dynamic attribute to get the correct
+ * Terraform representation
+ */
+export function processDynamicAttributesForHcl(attributes: {
+  [name: string]: any;
+}): {
+  [name: string]: any;
+} {
+  const result: { [name: string]: any; dynamic?: { [name: string]: any } } = {};
+  Object.entries(attributes).forEach(([attributeName, value]) => {
+    if (TerraformDynamicBlock.isTerraformDynamicBlock(value)) {
+      if (!result.dynamic) {
+        result.dynamic = {};
+      }
+      result.dynamic[attributeName] = value.toTerraformDynamicBlockJson();
+    } else {
+      const recurse =
+        value !== null &&
+        typeof value === "object" &&
+        value.constructor === Object; // only descend into plain objects
+      result[attributeName] = recurse
+        ? processDynamicAttributesForHcl(value)
+        : value;
+    }
+  });
+  return result;
 }
 
 /**

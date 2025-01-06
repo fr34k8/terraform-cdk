@@ -6,11 +6,13 @@ import * as yargs from "yargs";
 import * as path from "path";
 import * as os from "os";
 import * as fs from "fs-extra";
-import { readCDKTFManifest } from "../lib/util";
-import { IsErrorType } from "../lib/errors";
-import { collectDebugInformation } from "../lib/debug";
-import { CDKTF_DISABLE_PLUGIN_CACHE_ENV } from "../lib/environment";
 import * as Sentry from "@sentry/node";
+import {
+  readCDKTFManifest,
+  IsErrorType,
+  collectDebugInformation,
+  CDKTF_DISABLE_PLUGIN_CACHE_ENV,
+} from "@cdktf/commons";
 
 const ensurePluginCache = (): string => {
   const pluginCachePath =
@@ -92,6 +94,12 @@ yargs
   )
   .help()
   .alias("h", "help")
+  .option("experimental-provider-schema-cache-path", {
+    type: "string",
+    default: false,
+    required: false,
+    desc: "An experimental schema cache that can be used to improve the speed of cdktf get and convert. Supported using the env CDKTF_EXPERIMENTAL_PROVIDER_SCHEMA_CACHE_PATH.",
+  })
   .option("disable-plugin-cache-env", {
     type: "boolean",
     default: false,
@@ -103,12 +111,19 @@ yargs
     required: false,
     desc: "Which log level should be written. Only supported via setting the env CDKTF_LOG_LEVEL",
   })
+  .option("log-file-directory", {
+    require: false,
+    desc: "The directory path where CDKTF should create `cdktf.log` and print logs at the `debug` level. If not set, CDKTF writes logs to standard out at the level specified in `CDKTF_LOG_LEVEL`. Only supported via setting the env CDKTF_LOG_FILE_DIRECTORY",
+  })
   .option("context-json", {
     required: false,
     hidden: true,
     desc: "Used internally for env variable",
   })
   .completion("completion", customCompletion) // outputs completion script on "cdktf completion"
+  .parserConfiguration({
+    "boolean-negation": false,
+  })
   .command({
     command: "*", // catches everything not previously matched
     handler: (argv) => {
@@ -138,9 +153,10 @@ yargs
     }
 
     // set if e.g. an handler threw an error while being invoked
-    if (IsErrorType(error, "Usage")) {
+    if (IsErrorType(error, "Usage") || IsErrorType(error, "External")) {
       console.error(error.message);
     } else if (error) {
+      console.error(error.message);
       console.error(error.stack);
       console.error("Collecting Debug Information...");
       const debugOutput = await collectDebugInformation();

@@ -1,3 +1,8 @@
+/**
+ * Copyright (c) HashiCorp, Inc.
+ * SPDX-License-Identifier: MPL-2.0
+ */
+
 import React from "react";
 
 import { useCdktfProject } from "./hooks/cdktf-project";
@@ -9,6 +14,11 @@ interface DiffConfig {
   synthCommand: string;
   refreshOnly?: boolean;
   terraformParallelism?: number;
+  vars?: string[];
+  varFiles?: string[];
+  noColor?: boolean;
+  migrateState?: boolean;
+  skipSynth?: boolean;
 }
 
 export const Diff = ({
@@ -17,6 +27,11 @@ export const Diff = ({
   synthCommand,
   refreshOnly,
   terraformParallelism,
+  vars,
+  varFiles,
+  noColor,
+  migrateState,
+  skipSynth,
 }: DiffConfig): React.ReactElement => {
   const { status, logEntries } = useCdktfProject(
     { outDir, synthCommand },
@@ -25,6 +40,11 @@ export const Diff = ({
         stackName: targetStack,
         refreshOnly,
         terraformParallelism,
+        vars,
+        varFiles,
+        noColor,
+        migrateState,
+        skipSynth,
       })
   );
 

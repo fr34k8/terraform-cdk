@@ -1,0 +1,12 @@
+{
+  "language": "typescript",
+  "app": "npx ts-node main.ts",
+  "terraformProviders": ["null"],
+  "terraformModules": [
+    {
+      "name": "our-local-module",
+      "source": "./local-module"
+    }
+  ],
+  "context": {}
+}

@@ -40,12 +40,40 @@ export class TerraformLocal
     return Token.asList(this.interpolation());
   }
 
+  public get asStringMap(): { [key: string]: string } {
+    return Token.asStringMap(this.interpolation());
+  }
+
+  public get asNumberMap(): { [key: string]: number } {
+    return Token.asNumberMap(this.interpolation());
+  }
+
+  public get asBooleanMap(): { [key: string]: boolean } {
+    return Token.asBooleanMap(this.interpolation());
+  }
+
+  public get asAnyMap(): { [key: string]: any } {
+    return Token.asAnyMap(this.interpolation());
+  }
+
   public get asBoolean(): IResolvable {
     return this.interpolation();
   }
 
   private interpolation(): any {
     return ref(`local.${this.friendlyUniqueId}`, this.cdktfStack);
+  }
+
+  public toHclTerraform(): any {
+    return {
+      locals: {
+        [this.friendlyUniqueId]: {
+          value: this._expression,
+          isBlock: false,
+          type: "any",
+        },
+      },
+    };
   }
 
   public toTerraform(): any {
@@ -65,5 +93,12 @@ export class TerraformLocal
         local: Object.keys(this.rawOverrides),
       },
     };
+  }
+
+  /**
+   * @returns a string token referencing the value of this local
+   */
+  toString(): string {
+    return this.asString;
   }
 }

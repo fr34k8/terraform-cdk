@@ -2,13 +2,21 @@ name: Yarn Upgrade
 
 on:
   schedule:
-    # Every monday at 13:37 UTC
-    - cron: 37 13 * * 1
+    # At 04:04 every Monday
+    - cron: 4 4 * * 1
   workflow_dispatch: {}
 
+# We special-case @types/node because we want to stay on the current major (minimum supported node release)
+# We special-case @types/fs-extra because the current major (9.x) is broken with @types/node >= 10
+# We special-case typescript because it's not semantically versioned
+# We special-case constructs because we want to stay in control of the minimum compatible version
+# We special-case lerna because we have a patch on it that stops applying if Lerna upgrades. Remove this once https://github.com/lerna/lerna/pull/2874 releases.
+# We special-case graphology-types because the newer version has type definitions that are not compatible with our typescript version.
+# We special-case @types/prettier because the underlying TS types aren't supported by our TS version anymore since prettier v2.6.1
+
 jobs:
-  upgrade:
-    name: Yarn Upgrade
+  upgradeRoot:
+    name: Yarn Upgrade Root
     permissions:
       contents: read
     runs-on: ubuntu-latest
@@ -16,17 +24,19 @@ jobs:
       image: docker.mirror.hashicorp.services/hashicorp/jsii-terraform
     steps:
       - name: Check Out
-        uses: actions/checkout@v2
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Get yarn cache directory path
-        id: yarn-cache-dir-path
-        run: echo "::set-output name=dir::$(yarn cache dir)"
-      - uses: actions/cache@v2
-        id: yarn-cache # use this to check for `cache-hit` (`steps.yarn-cache.outputs.cache-hit != 'true'`)
+        id: global-cache-dir-path
+        run: echo "dir=$(yarn cache dir)" >> $GITHUB_OUTPUT
+      - uses: actions/cache@6849a6489940f00c2f30c0fb92c6274307ccb58a # v4.1.2
         with:
-          path: ${{ steps.yarn-cache-dir-path.outputs.dir }}
-          key: ${{ runner.os }}-yarn-${{ hashFiles('**/yarn.lock') }}
+          path: ${{ steps.global-cache-dir-path.outputs.dir }}
+          key: yarn-${{ runner.os }}-${{ hashFiles('**/yarn.lock') }}-upgrade
           restore-keys: |
-            ${{ runner.os }}-yarn-
+            yarn-${{ runner.os }}-${{ hashFiles('**/yarn.lock') }}-
+            yarn-${{ runner.os }}-
+      - name: ensure correct user
+        run: chown -R root /__w/terraform-cdk
       - name: Install Tools
         run: |-
           npm -g install lerna npm-check-updates@^9.0.0
@@ -34,31 +44,17 @@ jobs:
         id: list-packages
         # These need to be ignored from the `ncu` runs!
         run: |-
-          echo -n "::set-output name=list::"
-          node -p "$(lerna ls --all --json 2>/dev/null).map(item => item.name).join(',')"
+          echo "list=$(node -p "$(lerna ls --all --json 2>/dev/null).map(item => item.name).join(',')")" >> $GITHUB_OUTPUT
       - name: Run "ncu -u"
-        # We special-case @types/node because we want to stay on the current major (minimum supported node release)
-        # We special-case @types/fs-extra because the current major (9.x) is broken with @types/node >= 10
-        # We special-case typescript because it's not semantically versioned
-        # We special-case constructs because we want to stay in control of the minimum compatible version
-        # We special-case lerna because we have a patch on it that stops applying if Lerna upgrades. Remove this once https://github.com/lerna/lerna/pull/2874 releases.
-        # We special-case graphology-types because the newer version has type definitions that are not compatible with our typescript version.
-        # We special-case @types/prettier because the underlying TS types aren't supported by our TS version anymore since prettier v2.6.1
         run: |-
           # Upgrade dependencies at repository root
           ncu --upgrade --filter=@types/node,@types/fs-extra --target=minor
           ncu --upgrade --filter=typescript --target=patch
           ncu --upgrade --reject=@types/node,@types/fs-extra,constructs,typescript,lerna,@types/prettier --target=minor
-          # Upgrade all the packages
-          lerna exec --parallel ncu -- --upgrade --filter=@types/node,@types/fs-extra --target=minor
-          lerna exec --parallel ncu -- --upgrade --filter=typescript --target=patch
-          lerna exec --parallel ncu -- --upgrade --reject='@types/node,@types/fs-extra,constructs,typescript,graphology-types,${{ steps.list-packages.outputs.list }}'  --target=minor
-      # This will ensure the current lockfile is up-to-date with the dependency specifications (necessary for "yarn update" to run)
-      - name: Run "yarn install"
-        run: yarn install
 
-      - name: Run "yarn upgrade"
-        run: yarn upgrade
+      # This will ensure the current lockfile is up-to-date with the dependency specifications (necessary for "yarn upgrade" to run)
+      - name: Run "yarn install"
+        run: yarn install --prefer-offline
 
       # Next, create and upload the changes as a patch file. This will later be downloaded to create a pull request
       # Creating a pull request requires write permissions and it's best to keep write privileges isolated.
@@ -67,21 +63,21 @@ jobs:
           git add .
           git diff --patch --staged > ./upgrade.patch
       - name: Upload Patch
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
         with:
           name: upgrade.patch
           path: ./upgrade.patch
 
-  pr:
-    name: Create Pull Request
-    needs: upgrade
+  prRoot:
+    name: Create Pull Request Root
+    needs: upgradeRoot
     runs-on: ubuntu-latest
     steps:
       - name: Check Out
-        uses: actions/checkout@v2
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Download patch
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
         with:
           name: upgrade.patch
 
@@ -89,10 +85,10 @@ jobs:
         run: '[ -s ./upgrade.patch ] && git apply ./upgrade.patch || echo "Empty patch. Skipping."'
 
       - name: Remove patch file
-        run: '[ -s ./upgrade.patch ] && rm ./upgrade.patch || echo "Empty patch. Skipping."'
+        run: rm -f ./upgrade.patch
 
       - name: Make Pull Request
-        uses: peter-evans/create-pull-request@v3
+        uses: peter-evans/create-pull-request@5e914681df9dc83aa4e4905692ca88beb2f9e91f # v7.0.5
         with:
           # Git commit details
           branch: automation/yarn-upgrade
@@ -103,6 +99,170 @@ jobs:
           title: "chore: npm-check-updates && yarn upgrade"
           body: |-
             Ran npm-check-updates and yarn upgrade to keep the `yarn.lock` file up-to-date.
+          labels: dependencies,auto-approve,ci/run-all
+          team-reviewers: cdktf
+          token: ${{ secrets.TERRAFORM_CDK_PUSH_GITHUB_TOKEN }}
+
+  upgradePackage:
+    name: Yarn Upgrade Package
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    container:
+      image: docker.mirror.hashicorp.services/hashicorp/jsii-terraform
+    strategy:
+      fail-fast: false
+      matrix:
+        pr: [
+            { name: "cli", packages: ["cdktf-cli", "@cdktf/cli-core"] },
+            # A dumb hack to make the resulting expansion expression work since { cdktf }
+            # searches for the literal string, whereas { cdktf, cdktf } searches for either cdktf or cdktf
+            { name: "lib", packages: ["cdktf", "cdktf"] },
+            {
+              name: "util",
+              packages:
+                [
+                  "@cdktf/hcl2cdk",
+                  "@cdktf/hcl2json",
+                  "@cdktf/provider-schema",
+                  "@cdktf/provider-generator",
+                  "@cdktf/commons",
+                ],
+            },
+            # Sometimes we are very lucky and all packages can be updated in one go
+            # We should take the chance and spare us some rebases
+            {
+              name: "all",
+              packages:
+                [
+                  "cdktf-cli",
+                  "@cdktf/cli-core",
+                  "cdktf",
+                  "@cdktf/hcl2cdk",
+                  "@cdktf/hcl2json",
+                  "@cdktf/provider-schema",
+                  "@cdktf/provider-generator",
+                  "@cdktf/commons",
+                ],
+            },
+          ]
+    steps:
+      - name: Check Out
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Get yarn cache directory path
+        id: global-cache-dir-path
+        run: echo "dir=$(yarn cache dir)" >> $GITHUB_OUTPUT
+      - uses: actions/cache@6849a6489940f00c2f30c0fb92c6274307ccb58a # v4.1.2
+        with:
+          path: ${{ steps.global-cache-dir-path.outputs.dir }}
+          key: yarn-${{ runner.os }}-${{ hashFiles('**/yarn.lock') }}-upgrade
+          restore-keys: |
+            yarn-${{ runner.os }}-${{ hashFiles('**/yarn.lock') }}-
+            yarn-${{ runner.os }}-
+      - name: ensure correct user
+        run: chown -R root /__w/terraform-cdk
+      - name: Install Tools
+        run: |-
+          npm -g install lerna npm-check-updates@^9.0.0
+      - name: List Mono-Repo Packages
+        id: list-packages
+        # These need to be ignored from the `ncu` runs!
+        run: |-
+          echo "list=$(node -p "$(lerna ls --all --json 2>/dev/null).map(item => item.name).join(',')")" >> $GITHUB_OUTPUT
+      - name: Run "ncu -u"
+        run: |-
+          # Upgrade all the packages
+          lerna exec --scope='{${{ join(matrix.pr.packages, ',') }}}' ncu -- --upgrade --filter=@types/node,@types/fs-extra --target=minor
+          lerna exec --scope='{${{ join(matrix.pr.packages, ',') }}}' ncu -- --upgrade --filter=typescript --target=patch
+          lerna exec --scope='{${{ join(matrix.pr.packages, ',') }}}' ncu -- --upgrade --reject='@types/node,@types/fs-extra,constructs,typescript,graphology-types,jsii,jsii-pacmak,jsii-rosetta,jsii-docgen,codemaker,${{ steps.list-packages.outputs.list }}'  --target=minor
+      # This will ensure the current lockfile is up-to-date with the dependency specifications (necessary for "yarn upgrade" to run)
+      - name: Run "yarn install"
+        run: yarn install --prefer-offline
+
+      - name: Set git identity
+        run: |-
+          git config --global user.email "github-team-tf-cdk@hashicorp.com"
+          git config --global user.name "team-tf-cdk"
+
+      - name: Make Pull Request
+        uses: peter-evans/create-pull-request@5e914681df9dc83aa4e4905692ca88beb2f9e91f # v7.0.5
+        with:
+          # Git commit details
+          branch: automation/yarn-upgrade-${{ matrix.pr.name }}
+          commit-message: |-
+            chore: Upgrade dependencies for ${{matrix.pr.name}}
+            Ran npm-check-updates and yarn upgrade to keep the `yarn.lock` file up-to-date.
+          # Pull Request details
+          title: "chore: Upgrade dependencies for ${{matrix.pr.name}}"
+          body: |-
+            Ran npm-check-updates and yarn upgrade to keep the `yarn.lock` file up-to-date.
+            This PR touches the following packages:
+
+            ${{ join(matrix.pr.packages, '\n -')}}
+
           labels: dependencies,auto-approve
           team-reviewers: cdktf
           token: ${{ secrets.TERRAFORM_CDK_PUSH_GITHUB_TOKEN }}
+          author: team-tf-cdk <github-team-tf-cdk@hashicorp.com>
+
+  upgradeJSII:
+    name: Yarn Upgrade JSII
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    container:
+      image: docker.mirror.hashicorp.services/hashicorp/jsii-terraform
+    steps:
+      - name: Check Out
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Get yarn cache directory path
+        id: global-cache-dir-path
+        run: echo "dir=$(yarn cache dir)" >> $GITHUB_OUTPUT
+      - uses: actions/cache@6849a6489940f00c2f30c0fb92c6274307ccb58a # v4.1.2
+        with:
+          path: ${{ steps.global-cache-dir-path.outputs.dir }}
+          key: yarn-${{ runner.os }}-${{ hashFiles('**/yarn.lock') }}-upgrade
+          restore-keys: |
+            yarn-${{ runner.os }}-${{ hashFiles('**/yarn.lock') }}-
+            yarn-${{ runner.os }}-
+      - name: ensure correct user
+        run: chown -R root /__w/terraform-cdk
+      - name: Install Tools
+        run: |-
+          npm -g install lerna npm-check-updates@^9.0.0
+      - name: List Mono-Repo Packages
+        id: list-packages
+        # These need to be ignored from the `ncu` runs!
+        run: |-
+          echo "list=$(node -p "$(lerna ls --all --json 2>/dev/null).map(item => item.name).join(',')")" >> $GITHUB_OUTPUT
+      - name: Run "ncu -u"
+        run: |-
+          # Upgrade all the packages
+          lerna exec ncu -- --upgrade --filter='jsii,jsii-pacmak,jsii-rosetta,jsii-docgen,codemaker,constructs' --target=minor
+      # This will ensure the current lockfile is up-to-date with the dependency specifications (necessary for "yarn upgrade" to run)
+      - name: Run "yarn install"
+        run: yarn install --prefer-offline
+
+      - name: Set git identity
+        run: |-
+          git config --global user.email "github-team-tf-cdk@hashicorp.com"
+          git config --global user.name "team-tf-cdk"
+
+      - name: Make Pull Request
+        uses: peter-evans/create-pull-request@5e914681df9dc83aa4e4905692ca88beb2f9e91f # v7.0.5
+        with:
+          # Git commit details
+          branch: automation/yarn-upgrade-jsii
+          commit-message: |-
+            chore: Upgrade dependencies for JSII
+            Ran npm-check-updates and yarn upgrade to keep the `yarn.lock` file up-to-date.
+          # Pull Request details
+          title: "chore: Upgrade dependencies for JSII"
+          body: |-
+            Ran npm-check-updates and yarn upgrade to keep the `yarn.lock` file up-to-date.
+            This PR updates JSII across all packages.
+
+          labels: dependencies,auto-approve
+          team-reviewers: cdktf
+          token: ${{ secrets.TERRAFORM_CDK_PUSH_GITHUB_TOKEN }}
+          author: team-tf-cdk <github-team-tf-cdk@hashicorp.com>

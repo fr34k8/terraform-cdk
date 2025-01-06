@@ -1,6 +1,10 @@
 // Copyright (c) HashiCorp, Inc
 // SPDX-License-Identifier: MPL-2.0
 // copied from https://github.com/aws/constructs/blob/e01e47f78ef1e9b600efcd23ff7705aa8d384017/lib/private/intrinsic.ts
+import {
+  argToIntrinsicMustBePlainValue,
+  intrinsicNewError,
+} from "../../errors";
 import { IResolvable, IResolveContext } from "../resolvable";
 import { Token } from "../token";
 import { captureStackTrace } from "./stack-trace";
@@ -14,6 +18,7 @@ import { captureStackTrace } from "./stack-trace";
  * This class will disappear in a future release and should not be used.
  *
  * @experimental
+ * @internal
  */
 export class Intrinsic implements IResolvable {
   /**
@@ -24,13 +29,11 @@ export class Intrinsic implements IResolvable {
   private readonly value: any;
 
   constructor(value: any) {
+    this.creationStack = captureStackTrace();
     if (isFunction(value)) {
-      throw new Error(
-        `Argument to Intrinsic must be a plain value object, got ${value}`
-      );
+      throw argToIntrinsicMustBePlainValue(value, this.creationStack);
     }
 
-    this.creationStack = captureStackTrace();
     this.value = value;
   }
 
@@ -74,11 +77,7 @@ export class Intrinsic implements IResolvable {
    * @param message Error message
    */
   protected newError(message: string): any {
-    return new Error(
-      `${message}\nToken created:\n    at ${this.creationStack.join(
-        "\n    at "
-      )}\nError thrown:`
-    );
+    return intrinsicNewError(message, this.creationStack.join("\n    at "));
   }
 }
 

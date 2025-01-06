@@ -10,11 +10,15 @@ import {
 
 // eslint-disable-next-line jsdoc/require-jsdoc
 export class HttpBackend extends TerraformBackend {
-  constructor(scope: Construct, private readonly props: HttpBackendProps) {
+  constructor(scope: Construct, private readonly props: HttpBackendConfig) {
     super(scope, "backend", "http");
   }
 
   protected synthesizeAttributes(): { [name: string]: any } {
+    return keysToSnakeCase({ ...this.props });
+  }
+
+  protected synthesizeHclAttributes(): { [name: string]: any } {
     return keysToSnakeCase({ ...this.props });
   }
 
@@ -50,9 +54,9 @@ export class DataTerraformRemoteStateHttp extends TerraformRemoteState {
  * The ID of the holding lock info will be added as a query parameter to state updates requests.
  *
  * Read more about this backend in the Terraform docs:
- * https://www.terraform.io/language/settings/backends/http
+ * https://developer.hashicorp.com/terraform/language/settings/backends/http
  */
-export interface HttpBackendProps {
+export interface HttpBackendConfig {
   /**
    * (Required) The address of the REST endpoint
    */
@@ -101,8 +105,22 @@ export interface HttpBackendProps {
    * (Optional) The maximum time in seconds to wait between HTTP request attempts. Defaults to 30.
    */
   readonly retryWaitMax?: number;
+  /**
+   * (Optional) A PEM-encoded certificate used by the server to verify the client
+   * during mutual TLS (mTLS) authentication.
+   */
+  readonly clientCertificatePem?: string;
+  /**
+   * (Optional) A PEM-encoded private key, required if client_certificate_pem is specified.
+   */
+  readonly clientPrivateKeyPem?: string;
+  /**
+   * (Optional) A PEM-encoded CA certificate chain used by the client to verify server
+   * certificates during TLS authentication.
+   */
+  readonly clientCaCertificatePem?: string;
 }
 
 export interface DataTerraformRemoteStateHttpConfig
   extends DataTerraformRemoteStateConfig,
-    HttpBackendProps {}
+    HttpBackendConfig {}

@@ -89,8 +89,46 @@ test("app synth throws error when provider is missing", () => {
 
   expect(() => app.synth()).toThrowErrorMatchingInlineSnapshot(`
     "Validation failed with the following errors:
-      [MyStack] Found resources without a matching provider construct. Please make sure to add provider constructs [e.g. new RandomProvider(...)] to your stack for the following providers: test-provider"
+      [MyStack] Found resources without a matching provider construct. Please make sure to add provider constructs [e.g. new RandomProvider(...)] to your stack 'MyStack' for the following providers: test-provider
+
+    If you wish to ignore these validations, pass 'skipValidation: true' to your App configuration.
+    "
   `);
+});
+
+test("app synth supports app level validations", () => {
+  const outdir = fs.mkdtempSync(path.join(os.tmpdir(), "cdktf.outdir."));
+  const app = Testing.stubVersion(new App({ stackTraces: false, outdir }));
+
+  const mockValidation = {
+    validate: jest.fn().mockReturnValue(["error1", "error2"]),
+  };
+  app.node.addValidation(mockValidation);
+
+  expect(() => app.synth()).toThrowErrorMatchingInlineSnapshot(`
+    "App-level validation failed with the following errors:
+      error1
+      error2
+    Validations allow for dynamic verification of your project.
+    To skip validations, add 'skipValidation: true' to your App config.
+        "
+  `);
+  expect(mockValidation.validate).toHaveBeenCalledTimes(1);
+});
+
+test("app synth supports skipping app level validations", () => {
+  const outdir = fs.mkdtempSync(path.join(os.tmpdir(), "cdktf.outdir."));
+  const app = Testing.stubVersion(
+    new App({ stackTraces: false, outdir, skipValidation: true })
+  );
+
+  const mockValidation = {
+    validate: jest.fn().mockReturnValue(["error1"]),
+  };
+  app.node.addValidation(mockValidation);
+
+  expect(() => app.synth()).not.toThrow();
+  expect(mockValidation.validate).toHaveBeenCalledTimes(0);
 });
 
 test("app synth executes Aspects", () => {
@@ -416,7 +454,7 @@ describe("Cross Stack references", () => {
 
     expect(myResourceKey).toBeDefined();
     expect(resources[myResourceKey as string].name).toMatchInlineSnapshot(
-      `"\${test_resource.OriginStack_resource_3C7D7739.string_value}"`
+      `"\${test_resource.resource.string_value}"`
     );
   });
 
@@ -443,14 +481,14 @@ describe("Cross Stack references", () => {
     expect(
       resources[resourceWithoutFunctionKey as string].name
     ).toMatchInlineSnapshot(
-      `"\${data.terraform_remote_state.TestStack_crossstackreferenceinputOriginStack_EB91482E.outputs.OriginStack_crossstackoutputtestresourceOriginStackresource3C7D7739stringvalue_362449F3}"`
+      `"\${data.terraform_remote_state.cross-stack-reference-input-OriginStack.outputs.cross-stack-output-test_resourceresourcestring_value}"`
     );
 
     expect(resourceWithFunctionKey).toBeDefined();
     expect(
       resources[resourceWithFunctionKey as string].name
     ).toMatchInlineSnapshot(
-      `"\${tostring(data.terraform_remote_state.TestStack_crossstackreferenceinputOriginStack_EB91482E.outputs.OriginStack_crossstackoutputtestresourceOriginStackresource3C7D7739stringvalue_362449F3)}"`
+      `"\${tostring(data.terraform_remote_state.cross-stack-reference-input-OriginStack.outputs.cross-stack-output-test_resourceresourcestring_value)}"`
     );
   });
 
@@ -506,8 +544,8 @@ describe("Cross Stack references", () => {
       name: resource2.stringValue,
     });
 
-    expect(() => app.synth()).toThrowError(
-      /Can not add dependency TestStack to AnotherStack since it would result in a loop/
+    expect(() => app.synth()).toThrow(
+      /Cannot add dependency TestStack to AnotherStack, because it would cause a circular dependency/
     );
   });
 
@@ -578,14 +616,14 @@ describe("Cross Stack references", () => {
       JSON.parse(originStackSynth).output as { value: string }[]
     )[0].value;
     expect(originOutput).toMatchInlineSnapshot(
-      `"\${other_test_resource.OriginStack_other_935318CE.complex_computed_list[42]}"`
+      `"\${other_test_resource.other.complex_computed_list[42]}"`
     );
     expect(Object.keys(JSON.parse(targetStackSynth).output).length).toBe(1);
     const targetOutput = Object.values(
       JSON.parse(targetStackSynth).output as { value: string }[]
     )[0].value;
     expect(targetOutput).toMatchInlineSnapshot(
-      `"\${data.terraform_remote_state.TestStack_crossstackreferenceinputOriginStack_EB91482E.outputs.OriginStack_crossstackoutputothertestresourceOriginStackother935318CEcomplexcomputedlist42_0F4BEB95}"`
+      `"\${data.terraform_remote_state.cross-stack-reference-input-OriginStack.outputs.cross-stack-output-other_test_resourceothercomplex_computed_list42}"`
     );
   });
 
@@ -603,14 +641,14 @@ describe("Cross Stack references", () => {
       JSON.parse(originStackSynth).output as { value: string }[]
     )[0].value;
     expect(originOutput).toMatchInlineSnapshot(
-      `"\${other_test_resource.OriginStack_other_935318CE.complex_computed_list}"`
+      `"\${other_test_resource.other.complex_computed_list}"`
     );
     expect(Object.keys(JSON.parse(targetStackSynth).output).length).toBe(1);
     const targetOutput = Object.values(
       JSON.parse(targetStackSynth).output as { value: string }[]
     )[0].value;
     expect(targetOutput).toMatchInlineSnapshot(
-      `"\${data.terraform_remote_state.TestStack_crossstackreferenceinputOriginStack_EB91482E.outputs.OriginStack_crossstackoutputothertestresourceOriginStackother935318CEcomplexcomputedlist_FBDEFB6A}"`
+      `"\${data.terraform_remote_state.cross-stack-reference-input-OriginStack.outputs.cross-stack-output-other_test_resourceothercomplex_computed_list}"`
     );
   });
 
@@ -628,14 +666,14 @@ describe("Cross Stack references", () => {
       JSON.parse(originStackSynth).output as { value: string }[]
     )[0].value;
     expect(originOutput).toMatchInlineSnapshot(
-      `"\${other_test_resource.OriginStack_other_935318CE.outputRef[0].value}"`
+      `"\${other_test_resource.other.outputRef[0].value}"`
     );
     expect(Object.keys(JSON.parse(targetStackSynth).output).length).toBe(1);
     const targetOutput = Object.values(
       JSON.parse(targetStackSynth).output as { value: string }[]
     )[0].value;
     expect(targetOutput).toMatchInlineSnapshot(
-      `"\${data.terraform_remote_state.TestStack_crossstackreferenceinputOriginStack_EB91482E.outputs.OriginStack_crossstackoutputothertestresourceOriginStackother935318CEoutputRef0value_F44633B1}"`
+      `"\${data.terraform_remote_state.cross-stack-reference-input-OriginStack.outputs.cross-stack-output-other_test_resourceotheroutputRef0value}"`
     );
   });
 
@@ -653,14 +691,14 @@ describe("Cross Stack references", () => {
       JSON.parse(originStackSynth).output as { value: string }[]
     )[0].value;
     expect(originOutput).toMatchInlineSnapshot(
-      `"\${other_test_resource.OriginStack_other_935318CE}"`
+      `"\${other_test_resource.other}"`
     );
     expect(Object.keys(JSON.parse(targetStackSynth).output).length).toBe(1);
     const targetOutput = Object.values(
       JSON.parse(targetStackSynth).output as { value: string }[]
     )[0].value;
     expect(targetOutput).toMatchInlineSnapshot(
-      `"\${data.terraform_remote_state.TestStack_crossstackreferenceinputOriginStack_EB91482E.outputs.OriginStack_crossstackoutputothertestresourceOriginStackother935318CE_FB44ED5E}"`
+      `"\${data.terraform_remote_state.cross-stack-reference-input-OriginStack.outputs.cross-stack-output-other_test_resourceother}"`
     );
   });
 });

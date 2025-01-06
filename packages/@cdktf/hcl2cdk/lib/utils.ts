@@ -2,6 +2,10 @@
 // SPDX-License-Identifier: MPL-2.0
 import camelcase from "camelcase";
 
+export { logger } from "@cdktf/commons";
+
+export const leaveCommentText = `Please leave a comment at https://cdk.tf/bugs/convert-expressions if you run into this issue.`;
+
 export const camelCase = (str: string) => camelcase(str.replace(/[-/]/g, "_"));
 export const pascalCase = (str: string) =>
   camelcase(str.replace(/[-/]/g, "_"), { pascalCase: true });
@@ -12,19 +16,4 @@ export function uniqueId(set: Set<string>, key: string): string {
   }
   set.add(key);
   return key;
-}
-
-const noOp = () => {};
-const stubLogger: Console = {
-  ...console,
-  debug: noOp,
-  trace: noOp,
-  log: noOp,
-  warn: noOp,
-  error: noOp,
-};
-
-export let logger = stubLogger;
-export function setLogger(log: Console) {
-  logger = log;
 }

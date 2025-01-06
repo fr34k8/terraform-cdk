@@ -1,18 +1,62 @@
 // Jest Snapshot v1, https://goo.gl/fbAQLP
 
-exports[`throws error on unescaped double quote string inputs " 1`] = `"Argument 0 of md5 failed the validation: Error: '\\"' can not be used as value directly since it has unescaped double quotes in it. To safely use the value please use Fn.rawString on your string."`;
+exports[`throws error on unescaped double quote string inputs " 1`] = `
+"Argument 0 of md5 failed the validation: Error: Your value, '"', has unescaped double quotes in it, so it cannot be used as a value.
 
-exports[`throws error on unescaped double quote string inputs \\ \\\\" 1`] = `"Argument 0 of md5 failed the validation: Error: '\\\\ \\\\\\\\\\"' can not be used as value directly since it has unescaped double quotes in it. To safely use the value please use Fn.rawString on your string."`;
+To safely use the value, use Fn.rawString on your string, like so:
 
-exports[`throws error on unescaped double quote string inputs \\\\" 1`] = `"Argument 0 of md5 failed the validation: Error: '\\\\\\\\\\"' can not be used as value directly since it has unescaped double quotes in it. To safely use the value please use Fn.rawString on your string."`;
+Fn.rawString('"')
 
-exports[`throws error on unescaped double quote string inputs \\\\\\\\" 1`] = `"Argument 0 of md5 failed the validation: Error: '\\\\\\\\\\\\\\\\\\"' can not be used as value directly since it has unescaped double quotes in it. To safely use the value please use Fn.rawString on your string."`;
+Doing this ensures CDKTF and Terraform interpret your values correctly.
+
+To learn more about built in Terraform functions within CDKTF, refer to: https://developer.hashicorp.com/terraform/cdktf/concepts/functions
+. Please change your code to pass a valid value for this argument."
+`;
+
+exports[`throws error on unescaped double quote string inputs \\ \\\\" 1`] = `
+"Argument 0 of md5 failed the validation: Error: Your value, '\\ \\\\"', has unescaped double quotes in it, so it cannot be used as a value.
+
+To safely use the value, use Fn.rawString on your string, like so:
+
+Fn.rawString('\\ \\\\"')
+
+Doing this ensures CDKTF and Terraform interpret your values correctly.
+
+To learn more about built in Terraform functions within CDKTF, refer to: https://developer.hashicorp.com/terraform/cdktf/concepts/functions
+. Please change your code to pass a valid value for this argument."
+`;
+
+exports[`throws error on unescaped double quote string inputs \\\\" 1`] = `
+"Argument 0 of md5 failed the validation: Error: Your value, '\\\\"', has unescaped double quotes in it, so it cannot be used as a value.
+
+To safely use the value, use Fn.rawString on your string, like so:
+
+Fn.rawString('\\\\"')
+
+Doing this ensures CDKTF and Terraform interpret your values correctly.
+
+To learn more about built in Terraform functions within CDKTF, refer to: https://developer.hashicorp.com/terraform/cdktf/concepts/functions
+. Please change your code to pass a valid value for this argument."
+`;
+
+exports[`throws error on unescaped double quote string inputs \\\\\\\\" 1`] = `
+"Argument 0 of md5 failed the validation: Error: Your value, '\\\\\\\\"', has unescaped double quotes in it, so it cannot be used as a value.
+
+To safely use the value, use Fn.rawString on your string, like so:
+
+Fn.rawString('\\\\\\\\"')
+
+Doing this ensures CDKTF and Terraform interpret your values correctly.
+
+To learn more about built in Terraform functions within CDKTF, refer to: https://developer.hashicorp.com/terraform/cdktf/concepts/functions
+. Please change your code to pass a valid value for this argument."
+`;
 
 exports[`throws no error on valid escaped double quote string inputs  1`] = `
 "{
-  \\"output\\": {
-    \\"test-output\\": {
-      \\"value\\": \\"\${md5(\\\\\\"\\\\\\")}\\"
+  "output": {
+    "test-output": {
+      "value": "\${md5(\\"\\")}"
     }
   }
 }"
@@ -20,9 +64,9 @@ exports[`throws no error on valid escaped double quote string inputs  1`] = `
 
 exports[`throws no error on valid escaped double quote string inputs \\ \\" 1`] = `
 "{
-  \\"output\\": {
-    \\"test-output\\": {
-      \\"value\\": \\"\${md5(\\\\\\"\\\\\\\\ \\\\\\\\\\\\\\"\\\\\\")}\\"
+  "output": {
+    "test-output": {
+      "value": "\${md5(\\"\\\\ \\\\\\"\\")}"
     }
   }
 }"
@@ -30,9 +74,9 @@ exports[`throws no error on valid escaped double quote string inputs \\ \\" 1`] 
 
 exports[`throws no error on valid escaped double quote string inputs \\ \\\\\\" 1`] = `
 "{
-  \\"output\\": {
-    \\"test-output\\": {
-      \\"value\\": \\"\${md5(\\\\\\"\\\\\\\\ \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\"\\\\\\")}\\"
+  "output": {
+    "test-output": {
+      "value": "\${md5(\\"\\\\ \\\\\\\\\\\\\\"\\")}"
     }
   }
 }"
@@ -40,9 +84,9 @@ exports[`throws no error on valid escaped double quote string inputs \\ \\\\\\" 
 
 exports[`throws no error on valid escaped double quote string inputs \\" 1`] = `
 "{
-  \\"output\\": {
-    \\"test-output\\": {
-      \\"value\\": \\"\${md5(\\\\\\"\\\\\\\\\\\\\\"\\\\\\")}\\"
+  "output": {
+    "test-output": {
+      "value": "\${md5(\\"\\\\\\"\\")}"
     }
   }
 }"
@@ -50,9 +94,9 @@ exports[`throws no error on valid escaped double quote string inputs \\" 1`] = `
 
 exports[`throws no error on valid escaped double quote string inputs \\\\\\" 1`] = `
 "{
-  \\"output\\": {
-    \\"test-output\\": {
-      \\"value\\": \\"\${md5(\\\\\\"\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\"\\\\\\")}\\"
+  "output": {
+    "test-output": {
+      "value": "\${md5(\\"\\\\\\\\\\\\\\"\\")}"
     }
   }
 }"
@@ -60,9 +104,9 @@ exports[`throws no error on valid escaped double quote string inputs \\\\\\" 1`]
 
 exports[`throws no error on valid escaped double quote string inputs \\\\abc\\\\def\\\\ 1`] = `
 "{
-  \\"output\\": {
-    \\"test-output\\": {
-      \\"value\\": \\"\${md5(\\\\\\"\\\\\\\\\\\\\\\\abc\\\\\\\\\\\\\\\\def\\\\\\\\\\\\\\\\\\\\\\")}\\"
+  "output": {
+    "test-output": {
+      "value": "\${md5(\\"\\\\\\\\abc\\\\\\\\def\\\\\\\\\\")}"
     }
   }
 }"
@@ -70,9 +114,9 @@ exports[`throws no error on valid escaped double quote string inputs \\\\abc\\\\
 
 exports[`throws no error on valid escaped double quote string inputs \\abc\\def\\ 1`] = `
 "{
-  \\"output\\": {
-    \\"test-output\\": {
-      \\"value\\": \\"\${md5(\\\\\\"\\\\\\\\abc\\\\\\\\def\\\\\\\\\\\\\\")}\\"
+  "output": {
+    "test-output": {
+      "value": "\${md5(\\"\\\\abc\\\\def\\\\\\")}"
     }
   }
 }"

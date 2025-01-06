@@ -7,17 +7,18 @@ import { deepMerge } from "./util";
 import { ITerraformDependable } from "./terraform-dependable";
 import { Token } from "./tokens";
 import { ref, dependable } from "./tfExpression";
-import { TerraformAsset } from "./terraform-asset";
 import { ITerraformIterator } from "./terraform-iterator";
+import { modulesWithSameAlias, terraformModuleHasChildren } from "./errors";
+import { TerraformModuleAsset } from "./terraform-module-asset";
 
-export interface TerraformModuleUserOptions {
+export interface TerraformModuleUserConfig {
   readonly providers?: (TerraformProvider | TerraformModuleProvider)[];
   readonly dependsOn?: ITerraformDependable[];
   readonly forEach?: ITerraformIterator;
   readonly skipAssetCreationFromLocalModules?: boolean;
 }
 
-export interface TerraformModuleOptions extends TerraformModuleUserOptions {
+export interface TerraformModuleConfig extends TerraformModuleUserConfig {
   readonly source: string;
   readonly version?: string;
 }
@@ -27,7 +28,15 @@ export interface TerraformModuleProvider {
   readonly moduleAlias: string;
 }
 
-// eslint-disable-next-line jsdoc/require-jsdoc
+/**
+ * TerraformModule can be used to reference a local terraform module or a module from the Terraform Registry.
+ * It should be used if you can not use generated bindings for the module as you would get by adding the module
+ * to your cdktf.json files "terraformModules" array and running cdktf get.
+ *
+ * This class is not creating a Terraform module to be used outside of CDKTF.
+ * If you want to bundle certain resources together like you would do with a Terraform module,
+ * you should use Constructs instead, see http://cdk.tf/constructs for more details.
+ */
 export abstract class TerraformModule
   extends TerraformElement
   implements ITerraformDependable
@@ -39,19 +48,17 @@ export abstract class TerraformModule
   public forEach?: ITerraformIterator;
   public readonly skipAssetCreationFromLocalModules?: boolean;
 
-  constructor(scope: Construct, id: string, options: TerraformModuleOptions) {
+  constructor(scope: Construct, id: string, options: TerraformModuleConfig) {
     super(scope, id, "module");
 
     this.source = options.source;
 
     if (!options.skipAssetCreationFromLocalModules) {
       if (options.source.startsWith("./") || options.source.startsWith("../")) {
-        // Create an asset for the local module for better TFC support
-        const asset = new TerraformAsset(scope, `local-module-${id}`, {
-          path: options.source,
-        });
-        // Despite being a relative path already, further indicate it as such for Terraform handling
-        this.source = `./${asset.path}`;
+        // Create an asset or reuse existing "singleton asset" for the local module for better TFC support
+        this.source = TerraformModuleAsset.of(scope).getAssetPathForModule(
+          options.source
+        );
       }
     }
 
@@ -66,14 +73,30 @@ export abstract class TerraformModule
     this.forEach = options.forEach;
   }
 
+  // Adds synth-time validations
+  private onSynth(): void {
+    // We don't allow any nested constructs within TerraformModules, it's most likely a mistake
+    // where constructs should be used instead.
+    if (this.node.children.length > 0) {
+      throw terraformModuleHasChildren(this.node.path);
+    }
+  }
+
   // jsii can't handle abstract classes?
   protected synthesizeAttributes(): { [name: string]: any } {
     return {};
   }
 
+  // jsii can't handle abstract classes?
+  protected synthesizeHclAttributes(): { [name: string]: any } {
+    return {};
+  }
+
   public interpolationForOutput(moduleOutput: string) {
     return ref(
-      `module.${this.friendlyUniqueId}.${moduleOutput}`,
+      `module.${this.friendlyUniqueId}${
+        this.forEach ? ".*" : ""
+      }.${moduleOutput}`,
       this.cdktfStack
     );
   }
@@ -94,7 +117,64 @@ export abstract class TerraformModule
     this.validateIfProvidersHaveUniqueKeys();
   }
 
+  public toHclTerraform(): any {
+    this.onSynth();
+    const attributes = deepMerge(
+      {
+        ...this.synthesizeHclAttributes(),
+        source: {
+          value: this.source,
+          type: "simple",
+          isBlock: false,
+          storageClassType: "string",
+        },
+
+        version: this.version
+          ? {
+              value: this.version,
+              type: "simple",
+              isBlock: false,
+              storageClassType: "string",
+            }
+          : undefined,
+
+        providers: this._providers?.reduce((a, p) => {
+          if (TerraformProvider.isTerraformProvider(p)) {
+            return { ...a, [p.terraformResourceType]: p.fqn };
+          } else {
+            return {
+              ...a,
+              [`${p.provider.terraformResourceType}.${p.moduleAlias}`]:
+                p.provider.fqn,
+            };
+          }
+        }, {}),
+
+        depends_on: this.dependsOn
+          ? {
+              value: this.dependsOn,
+              type: "list",
+              isBlock: false,
+              storageClassType: "string",
+            }
+          : undefined,
+
+        for_each: this.forEach?._getForEachExpression(),
+      },
+      this.rawOverrides
+    );
+
+    attributes["//"] = this.constructNodeMetadata;
+
+    return {
+      module: {
+        [this.friendlyUniqueId]: attributes,
+      },
+    };
+  }
+
   public toTerraform(): any {
+    this.onSynth();
     const attributes = deepMerge(
       {
         ...this.synthesizeAttributes(),
@@ -150,9 +230,7 @@ export abstract class TerraformModule
     const uniqueModuleAliases = new Set();
     moduleAliases?.forEach((alias) => {
       if (uniqueModuleAliases.has(alias)) {
-        throw new Error(
-          `Error: Multiple providers have the same alias: "${alias}"`
-        );
+        throw modulesWithSameAlias(alias);
       }
       uniqueModuleAliases.add(alias);
     });

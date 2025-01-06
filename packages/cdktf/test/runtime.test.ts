@@ -14,13 +14,13 @@ describe("Runtime", () => {
 
       expect(resolveExpression(listMapper(identity)(["a", "b", "c", "d"])))
         .toMatchInlineSnapshot(`
-              Array [
-                "a",
-                "b",
-                "c",
-                "d",
-              ]
-            `);
+        [
+          "a",
+          "b",
+          "c",
+          "d",
+        ]
+      `);
       expect(identity).toHaveBeenCalledTimes(4);
     });
 
@@ -33,14 +33,14 @@ describe("Runtime", () => {
       expect(
         resolveExpression(listMapper(identity)(["a", reference, "b", "c", "d"]))
       ).toMatchInlineSnapshot(`
-              Array [
-                "a",
-                "\${some_resource.my_resource.some_attribute_array}",
-                "b",
-                "c",
-                "d",
-              ]
-            `);
+        [
+          "a",
+          "\${some_resource.my_resource.some_attribute_array}",
+          "b",
+          "c",
+          "d",
+        ]
+      `);
       expect(identity).toHaveBeenCalledTimes(5);
     });
 
@@ -68,7 +68,7 @@ describe("Runtime", () => {
           x: listMapper(identity)(Token.asList(reference)),
         })
       ).toMatchInlineSnapshot(`
-        Object {
+        {
           "x": "\${some_resource.my_resource.some_attribute_array}",
         }
       `);
@@ -84,7 +84,7 @@ describe("Runtime", () => {
           match_labels: hashMapper(anyToTerraform)(reference),
         })
       ).toMatchInlineSnapshot(`
-        Object {
+        {
           "match_labels": "\${some_resource.my_resource.some_attribute_array}",
         }
       `);
@@ -101,7 +101,7 @@ describe("Runtime", () => {
           x: listMapper(identity)(reference),
         })
       ).toMatchInlineSnapshot(`
-        Object {
+        {
           "x": "\${some_resource.my_resource.some_attribute_array}",
         }
       `);
@@ -118,7 +118,7 @@ describe("Runtime", () => {
           x: listMapper(identity)(reference),
         })
       ).toMatchInlineSnapshot(`
-        Object {
+        {
           "x": "\${some_resource.my_resource.some_attribute_array}",
         }
       `);
@@ -135,8 +135,8 @@ describe("Runtime", () => {
           x: listMapper(identity)(["a", reference, "b"]),
         })
       ).toMatchInlineSnapshot(`
-        Object {
-          "x": Array [
+        {
+          "x": [
             "a",
             "\${some_resource.my_resource.some_attribute_array}",
             "b",
@@ -159,9 +159,12 @@ describe("Runtime", () => {
             { x: { foo: "bar" } }
           )
         )
-      ).toThrowErrorMatchingInlineSnapshot(
-        `"Invalid usage. Target (\${TfToken[TOKEN.2]}) can not be a resolvable token when overrides are specified. Please replace the value of the field you are overriding with a static value."`
-      );
+      ).toThrowErrorMatchingInlineSnapshot(`
+        "Target (\${TfToken[TOKEN.2]}) cannot be a resolvable token if you specified overrides. Replace the value of the field you are overriding with a static value.
+
+        To learn more about Tokens, refer to: https://developer.hashicorp.com/terraform/cdktf/concepts/tokens
+        "
+      `);
     });
   });
 });

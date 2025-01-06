@@ -6,19 +6,17 @@ import { Tokenization, Token } from "./tokens/token";
 import { App } from "./app";
 import { TerraformStack } from "./terraform-stack";
 import { ITerraformDependable } from "./terraform-dependable";
+import { Construct } from "constructs";
+
+const TERRAFORM_IDENTIFIER_REGEX = /^[_a-zA-Z][_a-zA-Z0-9]*$/;
 
 // eslint-disable-next-line jsdoc/require-jsdoc
 class TFExpression extends Intrinsic implements IResolvable {
-  protected resolveArg(context: IResolveContext, arg: any): string {
+  protected resolveExpressionPart(context: IResolveContext, arg: any): string {
     const resolvedArg = context.resolve(arg);
     if (Tokenization.isResolvable(arg)) {
       return resolvedArg;
     }
-
-    if (typeof arg === "string") {
-      return this.resolveString(arg, resolvedArg);
-    }
-
     if (Array.isArray(resolvedArg)) {
       return `[${resolvedArg
         .map((_, index) => this.resolveArg(context, arg[index]))
@@ -27,11 +25,27 @@ class TFExpression extends Intrinsic implements IResolvable {
 
     if (typeof resolvedArg === "object" && resolvedArg !== null) {
       return `{${Object.keys(resolvedArg)
-        .map((key) => `${key} = ${this.resolveArg(context, arg[key])}`)
+        .map((key) => `"${key}" = ${this.resolveArg(context, arg[key])}`)
         .join(", ")}}`;
     }
 
     return resolvedArg;
+  }
+
+  protected resolveArg(context: IResolveContext, arg: any): string {
+    const resolvedArg = context.resolve(arg);
+
+    if (typeof arg === "string") {
+      const str = this.resolveString(arg, resolvedArg);
+      // When Token.asString() is used on an object, str will be the object and needs to be resolved differently
+      // This happens for example in MapTerraformIterator#_getForEachExpression and can cause issues like #3540
+      if (typeof str !== "string") {
+        return this.resolveExpressionPart(context, str);
+      }
+      return str;
+    }
+
+    return this.resolveExpressionPart(context, arg);
   }
 
   /**
@@ -58,7 +72,11 @@ class TFExpression extends Intrinsic implements IResolvable {
     }
 
     // Only a token reference
-    if (tokenList.literals.length === 0 && numberOfTokens === 1) {
+    if (
+      tokenList.literals.length === 0 &&
+      tokenList.escapes.length === 0 &&
+      numberOfTokens === 1
+    ) {
       return resolvedArg;
     }
 
@@ -196,11 +214,31 @@ class PropertyAccess extends TFExpression {
     context.suppressBraces = true;
 
     const serializedArgs = this.args
-      .map((arg) => this.resolveArg(context, arg))
-      .map((a) => `[${a}]`) // property access
+      .map((arg) => {
+        if (arg === `*`) {
+          return "[*]";
+        }
+
+        const a = this.resolveArg(context, arg);
+        const isPlainString =
+          typeof arg === "string" && TERRAFORM_IDENTIFIER_REGEX.test(arg);
+        const isPlainNumber =
+          typeof arg === "number" && !Token.isUnresolved(arg);
+
+        if (isPlainString || isPlainNumber) {
+          return `.${arg}`;
+        }
+
+        return `[${a}]`;
+      }) // property access
       .join("");
 
-    const expr = `${this.resolveArg(context, this.target)}${serializedArgs}`;
+    const targetExpr =
+      Construct.isConstruct(this.target) && "fqn" in this.target
+        ? this.target.fqn
+        : this.resolveArg(context, this.target);
+
+    const expr = `${targetExpr}${serializedArgs}`;
 
     return suppressBraces ? expr : `\${${expr}}`;
   }
@@ -246,7 +284,7 @@ export function conditional(
   return new ConditionalExpression(condition, trueValue, falseValue);
 }
 
-// https://www.terraform.io/docs/language/expressions/operators.html
+// https://developer.hashicorp.com/terraform/language/expressions/operators
 export type Operator =
   | "!"
   | "-"
@@ -262,8 +300,12 @@ export type Operator =
   | "!="
   | "&&"
   | "||";
-// eslint-disable-next-line jsdoc/require-jsdoc
-class OperatorExpression extends TFExpression {
+
+/**
+ * Base class for Operator Expressions
+ * @internal
+ */
+export class OperatorExpression extends TFExpression {
   constructor(
     private operator: Operator,
     private left: Expression,
@@ -305,80 +347,6 @@ class OperatorExpression extends TFExpression {
 }
 
 // eslint-disable-next-line jsdoc/require-jsdoc
-export function notOperation(expression: Expression) {
-  return new OperatorExpression("!", expression) as IResolvable;
-}
-
-// eslint-disable-next-line jsdoc/require-jsdoc
-export function negateOperation(expression: Expression) {
-  return new OperatorExpression("-", expression) as IResolvable;
-}
-
-// eslint-disable-next-line jsdoc/require-jsdoc
-export function mulOperation(left: Expression, right: Expression) {
-  return new OperatorExpression("*", left, right) as IResolvable;
-}
-
-// eslint-disable-next-line jsdoc/require-jsdoc
-export function divOperation(left: Expression, right: Expression) {
-  return new OperatorExpression("/", left, right) as IResolvable;
-}
-
-// eslint-disable-next-line jsdoc/require-jsdoc
-export function modOperation(left: Expression, right: Expression) {
-  return new OperatorExpression("%", left, right) as IResolvable;
-}
-
-// eslint-disable-next-line jsdoc/require-jsdoc
-export function addOperation(left: Expression, right: Expression) {
-  return new OperatorExpression("+", left, right) as IResolvable;
-}
-
-// eslint-disable-next-line jsdoc/require-jsdoc
-export function subOperation(left: Expression, right: Expression) {
-  return new OperatorExpression("-", left, right) as IResolvable;
-}
-
-// eslint-disable-next-line jsdoc/require-jsdoc
-export function gtOperation(left: Expression, right: Expression) {
-  return new OperatorExpression(">", left, right) as IResolvable;
-}
-
-// eslint-disable-next-line jsdoc/require-jsdoc
-export function gteOperation(left: Expression, right: Expression) {
-  return new OperatorExpression(">=", left, right) as IResolvable;
-}
-
-// eslint-disable-next-line jsdoc/require-jsdoc
-export function ltOperation(left: Expression, right: Expression) {
-  return new OperatorExpression("<", left, right) as IResolvable;
-}
-
-// eslint-disable-next-line jsdoc/require-jsdoc
-export function lteOperation(left: Expression, right: Expression) {
-  return new OperatorExpression("<=", left, right) as IResolvable;
-}
-
-// eslint-disable-next-line jsdoc/require-jsdoc
-export function eqOperation(left: Expression, right: Expression) {
-  return new OperatorExpression("==", left, right) as IResolvable;
-}
-
-// eslint-disable-next-line jsdoc/require-jsdoc
-export function neqOperation(left: Expression, right: Expression) {
-  return new OperatorExpression("!=", left, right) as IResolvable;
-}
-
-// eslint-disable-next-line jsdoc/require-jsdoc
-export function andOperation(left: Expression, right: Expression) {
-  return new OperatorExpression("&&", left, right) as IResolvable;
-}
-
-// eslint-disable-next-line jsdoc/require-jsdoc
-export function orOperation(left: Expression, right: Expression) {
-  return new OperatorExpression("||", left, right) as IResolvable;
-}
-// eslint-disable-next-line jsdoc/require-jsdoc
 class FunctionCall extends TFExpression {
   constructor(private name: string, private args: Expression[]) {
     super({ name, args });
@@ -386,13 +354,21 @@ class FunctionCall extends TFExpression {
 
   public resolve(context: IResolveContext): string {
     const suppressBraces = context.suppressBraces;
+    const originalIgnoreEscapes = context.ignoreEscapes;
+    const originalWarnEscapes = context.warnEscapes;
+
     context.suppressBraces = true;
+    context.ignoreEscapes = true;
+    context.warnEscapes = true;
 
     const serializedArgs = this.args
       .map((arg) => this.resolveArg(context, arg))
       .join(", ");
 
     const expr = `${this.name}(${serializedArgs})`;
+
+    context.ignoreEscapes = originalIgnoreEscapes;
+    context.warnEscapes = originalWarnEscapes;
 
     return suppressBraces ? expr : `\${${expr}}`;
   }
@@ -406,7 +382,7 @@ export const FOR_EXPRESSION_KEY = ref("key");
 export const FOR_EXPRESSION_VALUE = ref("val");
 
 /**
- * https://www.terraform.io/docs/language/expressions/for.html
+ * https://developer.hashicorp.com/terraform/language/expressions/for
  */
 class ForExpression extends TFExpression {
   constructor(
@@ -423,11 +399,12 @@ class ForExpression extends TFExpression {
     const key = this.resolveArg(context, FOR_EXPRESSION_KEY);
     const value = this.resolveArg(context, FOR_EXPRESSION_VALUE);
     const input = this.resolveArg(context, this.input);
-    const valueExpr = this.resolveArg(context, this.valueExpression);
+    const valueExpr = this.resolveExpressionPart(context, this.valueExpression);
 
     let expr: string;
     if (this.keyExpression) {
-      const keyExpr = this.resolveArg(context, this.keyExpression);
+      const keyExpr = this.resolveExpressionPart(context, this.keyExpression);
+
       expr = `{ for ${key}, ${value} in ${input}: ${keyExpr} => ${valueExpr} }`;
     } else {
       expr = `[ for ${key}, ${value} in ${input}: ${valueExpr}]`;

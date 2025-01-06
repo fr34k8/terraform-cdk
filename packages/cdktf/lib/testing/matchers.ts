@@ -2,8 +2,13 @@
 // SPDX-License-Identifier: MPL-2.0
 import * as fs from "fs";
 import * as path from "path";
-import { execSync } from "child_process";
+import { execSync, SpawnSyncReturns } from "child_process";
 import { snakeCase, terraformBinaryName } from "../util";
+import {
+  invalidStack,
+  matchersFoundErrorsInStack,
+  matchersPathIsNotDirectory,
+} from "../errors";
 
 // TerraformConstructor is class with the static property 'tfResourceType'
 export interface TerraformConstructor {
@@ -13,15 +18,28 @@ export interface TerraformConstructor {
 export type SynthesizedStack = {
   resource: Record<string, any>;
   data: Record<string, any>;
+  provider: Record<string, any>;
 };
 
-// eslint-disable-next-line jsdoc/require-jsdoc
+/**
+ * Class representing the contents of a return by an assertion
+ */
 export class AssertionReturn {
+  /**
+   * Create an AssertionReturn
+   * @param message - String message containing information about the result of the assertion
+   * @param pass - Boolean pass denoting the success of the assertion
+   */
   constructor(public readonly message: string, public readonly pass: boolean) {}
 }
 
 export type MatcherReturnJest = { message: () => string; pass: boolean };
-// eslint-disable-next-line jsdoc/require-jsdoc
+
+/**
+ * Reformats the contents of the base testing matcher return type AssertionReturn into type useable by jest
+ * @param toReturn
+ * @returns {MatcherReturnJest}
+ */
 export function returnMatcherToJest(
   toReturn: AssertionReturn
 ): MatcherReturnJest {
@@ -100,13 +118,14 @@ function isAsymmetric(obj: any) {
   return !!obj && typeof obj === "object" && "asymmetricMatch" in obj;
 }
 // You can use expect.Anything(), expect.ObjectContaining, etc in jest, this makes it nicer to read
-// when we print error mesages
+// when we print error messages
 // eslint-disable-next-line jsdoc/require-jsdoc
 function jestAsymetricMatcherStringifyReplacer(_key: string, value: any) {
   return isAsymmetric(value) ? `expect.${value.toString()}` : value;
 }
 // eslint-disable-next-line jsdoc/require-jsdoc
 function getAssertElementWithProperties(
+  functionName: string,
   // We have the evaluation function configurable so we can make use of the specific testing frameworks capabilities
   // This makes the resulting tests more native to the testing framework
   customPassEvaluation?: (
@@ -122,10 +141,16 @@ function getAssertElementWithProperties(
     properties: Record<string, any> = {}
   ): AssertionReturn {
     let stack: SynthesizedStack;
+
+    // Rececived could either be a JSON string or a path to a file
+    const stackContent = fs.existsSync(received)
+      ? fs.readFileSync(received, "utf8")
+      : received;
+
     try {
-      stack = JSON.parse(received) as SynthesizedStack;
+      stack = JSON.parse(stackContent) as SynthesizedStack;
     } catch (e) {
-      throw new Error(`invalid JSON string passed: ${received}`);
+      throw invalidStack(functionName, stackContent);
     }
 
     const items =
@@ -137,7 +162,6 @@ function getAssertElementWithProperties(
           )?.[1] || {} // get all items of that type (encoded as a record of name -> config)
       ) || []; // get a list of all configs of that type
     const pass = passEvaluation(items, properties);
-
     if (pass) {
       return new AssertionReturn(
         `Expected no ${
@@ -145,7 +169,7 @@ function getAssertElementWithProperties(
         } with properties ${JSON.stringify(
           properties,
           jestAsymetricMatcherStringifyReplacer
-        )} to be present in synthesised stack.
+        )} to be present in synthesized stack.
 Found ${items.length === 0 ? "no" : items.length} ${
           itemType.tfResourceType
         } resources instead${
@@ -158,7 +182,7 @@ Found ${items.length === 0 ? "no" : items.length} ${
         `Expected ${itemType.tfResourceType} with properties ${JSON.stringify(
           properties,
           jestAsymetricMatcherStringifyReplacer
-        )} to be present in synthesised stack.
+        )} to be present in synthesized stack.
 Found ${items.length === 0 ? "no" : items.length} ${
           itemType.tfResourceType
         } resources instead${
@@ -170,52 +194,139 @@ Found ${items.length === 0 ? "no" : items.length} ${
   };
 }
 
-// eslint-disable-next-line jsdoc/require-jsdoc
+/**
+ * Returns the function toHaveDataSourceWithProperties using the evaluation properties of customPassEvaluation
+ * @param customPassEvaluation
+ * @returns {getToHaveDataSourceWithProperties~toHaveDataSourceWithProperties}
+ */
 export function getToHaveDataSourceWithProperties(
   customPassEvaluation?: (
     items: any,
     assertedProperties: Record<string, any>
   ) => boolean
 ) {
+  /**
+   * Evaluates the received stack to have the data source resourceType containing specified properties
+   * @param received
+   * @param resourceType
+   * @param properties
+   * @returns {AssertionReturn}
+   */
   return function toHaveDataSourceWithProperties(
     received: string,
     resourceType: TerraformConstructor,
     properties: Record<string, any> = {}
   ): AssertionReturn {
-    return getAssertElementWithProperties(customPassEvaluation)(
-      "data",
-      received,
-      resourceType,
-      properties
-    );
+    return getAssertElementWithProperties(
+      "toHaveDataSourceWithProperties",
+      customPassEvaluation
+    )("data", received, resourceType, properties);
   };
 }
 
-// eslint-disable-next-line jsdoc/require-jsdoc
+/**
+ * Returns the function toHaveResourceWithProperties using the evaluation properties of customPassEvaluation
+ * @param customPassEvaluation
+ * @returns
+ */
 export function getToHaveResourceWithProperties(
   customPassEvaluation?: (
     items: any,
     assertedProperties: Record<string, any>
   ) => boolean
 ) {
+  /**
+   * Evaluates the received stack to have the resource resourceType containing specified properties
+   * @param received
+   * @param resourceType
+   * @param properties
+   * @returns {AssertionReturn}
+   */
   return function toHaveResourceWithProperties(
     received: string,
     resourceType: TerraformConstructor,
     properties: Record<string, any> = {}
   ): AssertionReturn {
-    return getAssertElementWithProperties(customPassEvaluation)(
-      "resource",
-      received,
-      resourceType,
-      properties
-    );
+    return getAssertElementWithProperties(
+      "toHaveResourceWithProperties",
+      customPassEvaluation
+    )("resource", received, resourceType, properties);
   };
 }
-// eslint-disable-next-line jsdoc/require-jsdoc
+
+/**
+ * A helper util to verify wether an Error was caused by the Nodejs `process.spawn` API.
+ *
+ * @param   {Error}   err The Error object to verify
+ * @returns {Boolean}     A bool indicating wether the input Error is containing process.spawn output.
+ */
+const isExecSpawnError = (err: any): err is Error & SpawnSyncReturns<any> =>
+  "output" in err &&
+  Array.isArray(err.output) &&
+  err.output.some((buf: any) => Buffer.isBuffer(buf));
+
+/**
+ * A helper util to append `process.spawn` output to assertion messages to improve developer expirience.
+ *
+ * @param   {String} message The message to optionally append process output to.
+ * @param   {Error}  err     The error from which the `process.spawn` output should be retreived from.
+ * @returns {String}         The finalized assertion message decorated with the `process.spawn` output.
+ */
+const withProcessOutput = (message: string, err: unknown) => {
+  let output = "";
+
+  if (isExecSpawnError(err)) {
+    output =
+      err.output
+        ?.map((buffer: Buffer) => buffer?.toString("utf8"))
+        .filter(Boolean)
+        .join("\n") ?? "";
+  }
+
+  const appendix = output.length ? `. Output: ${output}` : "";
+
+  return `${message}: ${err}${appendix}.`;
+};
+
+/**
+ * Returns the function toHaveProviderWithProperties using the evaluation properties of customPassEvaluation
+ * @param customPassEvaluation
+ * @returns {getToHaveProviderWithProperties~toHaveProviderWithProperties}
+ */
+export function getToHaveProviderWithProperties(
+  customPassEvaluation?: (
+    items: any,
+    assertedProperties: Record<string, any>
+  ) => boolean
+) {
+  /**
+   * Evaluates the received stack to have the provider resourceType containing specified properties
+   * @param received
+   * @param resourceType
+   * @param properties
+   * @returns {AssertionReturn}
+   */
+  return function toHaveProviderWithProperties(
+    received: string,
+    resourceType: TerraformConstructor,
+    properties: Record<string, any> = {}
+  ): AssertionReturn {
+    return getAssertElementWithProperties(
+      "toHaveProviderWithProperties",
+      customPassEvaluation
+    )("provider", received, resourceType, properties);
+  };
+}
+
+/**
+ * Evaluates the validity of the received stack
+ * @param received
+ * @returns {AssertionReturn}
+ */
 export function toBeValidTerraform(received: string): AssertionReturn {
   try {
     if (!fs.statSync(received).isDirectory()) {
-      throw new Error("Path is not a directory");
+      throw matchersPathIsNotDirectory("toBeValidTerraform");
     }
   } catch (e) {
     return new AssertionReturn(
@@ -242,10 +353,10 @@ export function toBeValidTerraform(received: string): AssertionReturn {
 
       const result = JSON.parse(out.toString());
       if (!result.valid) {
-        throw new Error(
-          `Found ${
-            result.error_count
-          } Errors in stack ${name}: ${result.diagnostics.join("\n")}`
+        throw matchersFoundErrorsInStack(
+          result.error_count,
+          name,
+          result.diagnostics.join("\n")
         );
       }
     });
@@ -255,17 +366,21 @@ export function toBeValidTerraform(received: string): AssertionReturn {
     );
   } catch (e) {
     return new AssertionReturn(
-      `Expected subject to be a valid terraform stack: ${e}`,
+      withProcessOutput(`Expected subject to be a valid terraform stack`, e),
       false
     );
   }
 }
 
-// eslint-disable-next-line jsdoc/require-jsdoc
+/**
+ * Evaluates the ability for the received stack to successfully plan
+ * @param received
+ * @returns {AssertionReturn}
+ */
 export function toPlanSuccessfully(received: string): AssertionReturn {
   try {
     if (!fs.statSync(received).isDirectory()) {
-      throw new Error("Path is not a directory");
+      throw matchersPathIsNotDirectory("toPlanSuccessfully");
     }
   } catch (e) {
     return new AssertionReturn(
@@ -299,7 +414,7 @@ export function toPlanSuccessfully(received: string): AssertionReturn {
     );
   } catch (e) {
     return new AssertionReturn(
-      `Expected subject to plan successfully: ${e}`,
+      withProcessOutput(`Expected subject to plan successfully`, e),
       false
     );
   }

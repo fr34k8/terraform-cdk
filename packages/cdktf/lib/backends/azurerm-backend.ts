@@ -10,11 +10,15 @@ import {
 
 // eslint-disable-next-line jsdoc/require-jsdoc
 export class AzurermBackend extends TerraformBackend {
-  constructor(scope: Construct, private readonly props: AzurermBackendProps) {
+  constructor(scope: Construct, private readonly props: AzurermBackendConfig) {
     super(scope, "backend", "azurerm");
   }
 
   protected synthesizeAttributes(): { [name: string]: any } {
+    return keysToSnakeCase({ ...this.props });
+  }
+
+  protected synthesizeHclAttributes(): { [name: string]: any } {
     return keysToSnakeCase({ ...this.props });
   }
 
@@ -53,9 +57,9 @@ export class DataTerraformRemoteStateAzurerm extends TerraformRemoteState {
  * so that MSAL authentication is used by default.
  *
  * Read more about this backend in the Terraform docs:
- * https://www.terraform.io/language/settings/backends/azurerm
+ * https://developer.hashicorp.com/terraform/language/settings/backends/azurerm
  */
-export interface AzurermBackendProps {
+export interface AzurermBackendConfig {
   /**
    * (Required) The Name of the Storage Account.
    */
@@ -82,6 +86,12 @@ export interface AzurermBackendProps {
    * NOTE: An endpoint should only be configured when using Azure Stack.
    */
   readonly endpoint?: string;
+  /**
+   * (Optional) The Hostname of the Azure Metadata Service (for example management.azure.com),
+   * used to obtain the Cloud Environment when using a Custom Azure Environment.
+   * This can also be sourced from the ARM_METADATA_HOSTNAME Environment Variable.)
+   */
+  readonly metadataHost?: string;
   /**
    * (Optional) Should the Blob used to store the Terraform Statefile be
    * snapshotted before use? Defaults to false. This value can also be sourced
@@ -170,6 +180,16 @@ export interface AzurermBackendProps {
    */
   readonly oidcRequestToken?: string;
   /**
+   * (Optional) The ID token when authenticating using OpenID Connect (OIDC).
+   * This can also be sourced from the ARM_OIDC_TOKEN environment variable.
+   */
+  readonly oidcToken?: string;
+  /**
+   * (Optional) The path to a file containing an ID token when authenticating using OpenID Connect (OIDC).
+   * This can also be sourced from the ARM_OIDC_TOKEN_FILE_PATH environment variable.
+   */
+  readonly oidcTokenFilePath?: string;
+  /**
    * (Optional) Should OIDC authentication be used? This can also be sourced
    * from the ARM_USE_OIDC environment variable.
    *
@@ -190,4 +210,4 @@ export interface AzurermBackendProps {
 
 export interface DataTerraformRemoteStateAzurermConfig
   extends DataTerraformRemoteStateConfig,
-    AzurermBackendProps {}
+    AzurermBackendConfig {}

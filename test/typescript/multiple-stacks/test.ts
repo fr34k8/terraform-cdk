@@ -1,6 +1,12 @@
 // Copyright (c) HashiCorp, Inc
 // SPDX-License-Identifier: MPL-2.0
-import { TestDriver, onPosix, onWindows } from "../../test-helper";
+import {
+  TestDriver,
+  onPosix,
+  onWindows,
+  onlyHcl,
+  onlyJson,
+} from "../../test-helper";
 
 describe("multiple stacks", () => {
   let driver: TestDriver;
@@ -11,10 +17,20 @@ describe("multiple stacks", () => {
   });
 
   describe("CLI-driven workflow", () => {
-    test("synth", async () => {
+    onlyJson("synth", async () => {
       await driver.synth();
       expect(driver.synthesizedStack("first").toString()).toMatchSnapshot();
       expect(driver.synthesizedStack("second").toString()).toMatchSnapshot();
+    });
+
+    onlyHcl("hcl synth", async () => {
+      await driver.synth();
+      expect(
+        driver.synthesizedStackContentsRaw("first").toString()
+      ).toMatchSnapshot();
+      expect(
+        driver.synthesizedStackContentsRaw("second").toString()
+      ).toMatchSnapshot();
     });
 
     test("diff", () => {
@@ -45,8 +61,8 @@ describe("multiple stacks", () => {
       expect(driver.list()).toMatchInlineSnapshot(`
       "
       Stack name                      Path
-      first                           cdktf.out\\\\stacks\\\\first
-      second                          cdktf.out\\\\stacks\\\\second
+      first                           cdktf.out\\stacks\\first
+      second                          cdktf.out\\stacks\\second
       "
     `);
     });

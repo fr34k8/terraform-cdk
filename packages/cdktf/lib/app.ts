@@ -7,17 +7,29 @@ import { DISABLE_STACK_TRACE_IN_METADATA } from "./annotations";
 import { Manifest } from "./manifest";
 import { ISynthesisSession } from "./synthesize";
 import { TerraformStack } from "./terraform-stack";
+import { appValidationFailure, noAppFound } from "./errors";
 
 const APP_SYMBOL = Symbol.for("cdktf/App");
 export const CONTEXT_ENV = "CDKTF_CONTEXT_JSON";
-export interface AppOptions {
+export interface AppConfig {
   /**
    * The directory to output Terraform resources.
+   *
+   * If you are using the CDKTF CLI, this value is automatically set from one of the following three sources:
+   * - The `-o` / `--output` CLI option
+   * - The `CDKTF_OUTDIR` environment variable
+   * - The `outdir` key in `cdktf.json`
+   *
+   * If you are using the CDKTF CLI and want to set a different value here, you will also need to set the same value via one of the three ways specified above.
+   *
+   * The most common case to set this value is when you are using the CDKTF library directly (e.g. when writing unit tests).
    *
    * @default - CDKTF_OUTDIR if defined, otherwise "cdktf.out"
    */
   readonly outdir?: string;
   readonly stackTraces?: boolean;
+
+  readonly hclOutput?: boolean;
 
   /**
    * Additional context values for the application.
@@ -31,11 +43,18 @@ export interface AppOptions {
   readonly context?: { [key: string]: any };
 
   /**
-   * Whether to skip the validation during synthesis of the app
+   * Whether to skip all validations during synthesis of the app
    *
    * @default - false
    */
   readonly skipValidation?: boolean;
+
+  /**
+   * Whether to skip backend validation during synthesis of the app
+   *
+   * @default - false
+   */
+  readonly skipBackendValidation?: boolean;
 }
 
 /**
@@ -47,6 +66,8 @@ export class App extends Construct {
    */
   public readonly outdir: string;
 
+  public readonly hclOutput: boolean;
+
   /**
    * The stack which will be synthesized. If not set, all stacks will be synthesized.
    */
@@ -55,26 +76,39 @@ export class App extends Construct {
   public readonly manifest: Manifest;
 
   /**
-   * Whether to skip the validation during synthesis of the app
+   * Whether to skip all validations during synthesis of the app
    */
-  public readonly skipValidation?: boolean;
+  public readonly skipValidation: boolean;
+
+  /**
+   * Whether to skip backend validation during synthesis of the app
+   */
+  public readonly skipBackendValidation: boolean;
 
   /**
    * Defines an app
-   * @param options configuration options
+   * @param config configuration
    */
-  constructor(options: AppOptions = {}) {
+  constructor(config: AppConfig = {}) {
     super(undefined as any, "");
     Object.defineProperty(this, APP_SYMBOL, { value: true });
 
-    this.outdir = process.env.CDKTF_OUTDIR ?? options.outdir ?? "cdktf.out";
-    this.targetStackId = process.env.CDKTF_TARGET_STACK_ID;
-    this.skipValidation = options.skipValidation;
+    this.outdir = config.outdir ?? process.env.CDKTF_OUTDIR ?? "cdktf.out";
+    const envHclOutput = process.env.SYNTH_HCL_OUTPUT;
+    let hclOutput = config.hclOutput || false;
+    if (envHclOutput !== undefined) {
+      hclOutput = envHclOutput === "true";
+    }
 
-    this.loadContext(options.context);
+    this.hclOutput = hclOutput;
+    this.targetStackId = process.env.CDKTF_TARGET_STACK_ID;
+    this.skipValidation = config.skipValidation || false;
+    this.skipBackendValidation = config.skipBackendValidation || false;
+
+    this.loadContext(config.context);
 
     const node = this.node;
-    if (options.stackTraces === false) {
+    if (config.stackTraces === false) {
       node.setContext(DISABLE_STACK_TRACE_IN_METADATA, true);
     }
 
@@ -83,7 +117,7 @@ export class App extends Construct {
     if (!fs.existsSync(this.outdir)) {
       fs.mkdirSync(this.outdir);
     }
-    this.manifest = new Manifest(version, this.outdir);
+    this.manifest = new Manifest(version, this.outdir, this.hclOutput);
   }
 
   public static isApp(x: any): x is App {
@@ -102,9 +136,7 @@ export class App extends Construct {
       const node = c.node;
 
       if (!node.scope) {
-        throw new Error(
-          `No app could be identified for the construct at path '${construct.node.path}'`
-        );
+        throw noAppFound(construct.node.path);
       }
 
       return _lookup(node.scope);
@@ -127,6 +159,14 @@ export class App extends Construct {
 
     stacks.forEach((stack) => stack.prepareStack());
     stacks.forEach((stack) => stack.synthesizer.synthesize(session));
+
+    if (!this.skipValidation) {
+      const validations = this.node.validate();
+      if (validations.length) {
+        const errorList = validations.join("\n  ");
+        throw appValidationFailure(errorList);
+      }
+    }
 
     this.manifest.writeToFile();
   }

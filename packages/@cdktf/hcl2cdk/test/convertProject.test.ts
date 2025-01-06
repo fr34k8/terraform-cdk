@@ -4,13 +4,13 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import { execSync } from "child_process";
-import { convertProject, getTerraformConfigFromDir } from "../lib";
 import {
-  readSchema,
-  ConstructsMakerProviderTarget,
   LANGUAGES,
-  config,
-} from "@cdktf/provider-generator";
+  TerraformProviderConstraint,
+  ConstructsMakerProviderTarget,
+} from "@cdktf/commons";
+import { readSchema } from "@cdktf/provider-schema";
+import { convertProject, getTerraformConfigFromDir } from "../lib";
 
 const providerRequirements = ["kreuzwerker/docker@ ~>2.15.0"];
 const CDKTF_CLI = path.resolve(
@@ -78,11 +78,11 @@ app.synth();`,
           "upgrade:next": "npm i cdktf@next cdktf-cli@next"
         },
         "engines": {
-          "node": ">=14.0"
+          "node": ">=18.0"
         },
         "dependencies": {
           "cdktf": "latest",
-          "constructs": "^10.0.5"
+          "constructs": "^10.3.0"
         },
         "devDependencies": {
           "@types/node": "^14.0.26",
@@ -96,7 +96,6 @@ app.synth();`,
       `{
         "compilerOptions": {
           "alwaysStrict": true,
-          "charset": "utf8",
           "declaration": true,
           "experimentalDecorators": true,
           "inlineSourceMap": true,
@@ -176,7 +175,7 @@ describe.skip("convertProject", () => {
     const { providerSchema } = await readSchema(
       providerRequirements.map((spec) =>
         ConstructsMakerProviderTarget.from(
-          new config.TerraformProviderConstraint(spec),
+          new TerraformProviderConstraint(spec),
           LANGUAGES[0]
         )
       )
@@ -195,7 +194,7 @@ describe.skip("convertProject", () => {
           }
         }
       }
-      
+
       provider "docker" {
         host = "unix:///var/run/docker.sock"
       }`,
@@ -205,7 +204,7 @@ describe.skip("convertProject", () => {
         `resource "docker_image" "ubuntu" {
             name = "ubuntu:latest"
           }
-          
+
           resource "docker_container" "foo" {
             image = docker_image.ubuntu.latest
             name  = "foo"
@@ -216,7 +215,7 @@ describe.skip("convertProject", () => {
         `module "k3s" {
         source  = "camptocamp/k3s/docker"
         version = "0.11.0"
-        
+
         cluster_endpoint = ""
         cluster_name = "cdktf"
         network_name = ""

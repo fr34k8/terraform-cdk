@@ -1,8 +1,7 @@
 {
   "language": "java",
-  "app": "mvn -e -q compile exec:java",
+  "app": "./gradlew run",
+  "codeMakerOutput": "imports",
   "terraformProviders": ["kreuzwerker/docker@~> 2.0"],
-  "context": {
-    "excludeStackIdFromLogicalIds": "true"
-  }
+  "context": {}
 }

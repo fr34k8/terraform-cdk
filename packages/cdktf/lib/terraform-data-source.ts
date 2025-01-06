@@ -9,12 +9,19 @@ import {
   TerraformResourceConfig,
   TerraformResourceLifecycle,
   ITerraformResource,
+  lifecycleToTerraform,
 } from "./terraform-resource";
-import { keysToSnakeCase, deepMerge, processDynamicAttributes } from "./util";
+import {
+  keysToSnakeCase,
+  deepMerge,
+  processDynamicAttributes,
+  processDynamicAttributesForHcl,
+} from "./util";
 import { ITerraformDependable } from "./terraform-dependable";
 import { ref, dependable } from "./tfExpression";
 import { IInterpolatingParent } from "./terraform-addressable";
 import { ITerraformIterator } from "./terraform-iterator";
+import { TerraformCount } from "./terraform-count";
 import assert = require("assert");
 
 const TERRAFORM_DATA_SOURCE_SYMBOL = Symbol.for("cdktf/TerraformDataSource");
@@ -30,7 +37,7 @@ export class TerraformDataSource
   // TerraformMetaArguments
 
   public dependsOn?: string[];
-  public count?: number;
+  public count?: number | TerraformCount;
   public provider?: TerraformProvider;
   public lifecycle?: TerraformResourceLifecycle;
   public forEach?: ITerraformIterator;
@@ -107,11 +114,14 @@ export class TerraformDataSource
       !this.forEach || typeof this.count === "undefined",
       `forEach and count are both set, but they are mutually exclusive. You can only use either of them. Check the data source at path: ${this.node.path}`
     );
+
     return {
       dependsOn: this.dependsOn,
-      count: this.count,
+      count: TerraformCount.isTerraformCount(this.count)
+        ? this.count.toTerraform()
+        : this.count,
       provider: this.provider?.fqn,
-      lifecycle: this.lifecycle,
+      lifecycle: lifecycleToTerraform(this.lifecycle),
       forEach: this.forEach?._getForEachExpression(),
     };
   }
@@ -119,6 +129,31 @@ export class TerraformDataSource
   // jsii can't handle abstract classes?
   protected synthesizeAttributes(): { [name: string]: any } {
     return {};
+  }
+
+  protected synthesizeHclAttributes(): { [name: string]: any } {
+    return {};
+  }
+
+  /**
+   * Adds this resource to the terraform JSON output.
+   */
+  public toHclTerraform(): any {
+    const attributes = deepMerge(
+      processDynamicAttributesForHcl(this.synthesizeHclAttributes()),
+      keysToSnakeCase(this.terraformMetaArguments),
+      this.rawOverrides
+    );
+
+    attributes["//"] = this.constructNodeMetadata;
+
+    return {
+      data: {
+        [this.terraformResourceType]: {
+          [this.friendlyUniqueId]: attributes,
+        },
+      },
+    };
   }
 
   /**
@@ -155,7 +190,9 @@ export class TerraformDataSource
 
   public interpolationForAttribute(terraformAttribute: string) {
     return ref(
-      `data.${this.terraformResourceType}.${this.friendlyUniqueId}.${terraformAttribute}`,
+      `data.${this.terraformResourceType}.${this.friendlyUniqueId}${
+        this.forEach ? ".*" : ""
+      }.${terraformAttribute}`,
       this.cdktfStack
     );
   }

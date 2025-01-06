@@ -1,7 +1,6 @@
 // Copyright (c) HashiCorp, Inc
 // SPDX-License-Identifier: MPL-2.0
 import { AttributeTypeModel } from "./attribute-type-model";
-import { logger } from "../../../config";
 
 export type GetterType =
   | { _type: "plain" }
@@ -33,6 +32,7 @@ export interface AttributeModelOptions {
   getAttCall?: string;
   provider: boolean;
   required: boolean;
+  forcePlainGetterType?: boolean; // used for skipping attribute type attributes that use the SkippedAttributeTypeModel which returns an interpolation and has no stored type
 }
 
 export function escapeAttributeName(name: string) {
@@ -48,6 +48,12 @@ export function escapeAttributeName(name: string) {
   if (name === "system") return "systemAttribute";
   // `tfResourceType` is already used by resources to distinguish between different resource types
   if (name === "tfResourceType") return `${name}Attribute`;
+  // `importFrom` has potential for common name collision with providers
+  if (name === "importFrom") return `${name}Attribute`;
+  // `move` could have common name collision with providers
+  if (name === "moveTo") return `${name}Attribute`;
+  // `software` attribute can be confused with the JSII Java runtime package (see #3115)
+  if (name === "software") return `${name}Attribute`;
   return name;
 }
 
@@ -62,6 +68,7 @@ export class AttributeModel {
   private _description?: string;
   public provider: boolean;
   public required: boolean;
+  public forcePlainGetterType?: boolean;
 
   constructor(options: AttributeModelOptions) {
     this.storageName = options.storageName;
@@ -74,11 +81,12 @@ export class AttributeModel {
     this._description = options.description;
     this.provider = options.provider;
     this.required = options.required;
+    this.forcePlainGetterType = options.forcePlainGetterType;
   }
 
   public get typeDefinition() {
     const optional = this.optional ? "?" : "";
-    return `${this.name}${optional}: ${this.type.name}`;
+    return `${this.name}${optional}: ${this.type.inputTypeDefinition}`;
   }
 
   public get isAssignable() {
@@ -93,10 +101,6 @@ export class AttributeModel {
     return this.required;
   }
 
-  public get isTokenizable(): boolean {
-    return this.type.isTokenizable;
-  }
-
   public get isProvider(): boolean {
     return this.provider;
   }
@@ -104,87 +108,29 @@ export class AttributeModel {
   public get getterType(): GetterType {
     let getterType: GetterType = { _type: "plain" };
 
+    if (this.forcePlainGetterType) {
+      return getterType;
+    }
+
     if (this.isProvider) {
       return getterType;
     }
 
-    if (
-      // Complex Computed List Map
+    if (this.type.hasReferenceClass) {
+      getterType = {
+        _type: "stored_class",
+      };
+    } else if (
+      this.computed &&
       !this.isAssignable &&
-      this.type.isComputedComplex &&
-      this.type.isList &&
-      this.type.isMap
+      (!this.type.isTokenizable || this.type.typeModelType === "map")
     ) {
       getterType = {
         _type: "stored_class",
       };
-    } else if (
-      // Complex List/Set
-      this.type.isComplex &&
-      (this.type.isList || this.type.isSet)
-    ) {
-      getterType = {
-        _type: "stored_class",
-      };
-    } else if (
-      // Complex Map
-      this.type.isComplex &&
-      this.type.isMap
-    ) {
-      getterType = {
-        _type: "stored_class",
-      };
-    } else if (
-      // Computed Map
-      this.type.isComputed &&
-      !this.isAssignable &&
-      this.type.isMap
-    ) {
-      getterType = {
-        _type: "stored_class",
-      };
-    }
-
-    if (this.type.isSingleItem) {
-      getterType = { _type: "stored_class" };
-    }
-
-    if (this.type.isNested) {
-      getterType = { _type: "stored_class" };
     }
 
     return getterType;
-  }
-
-  public get mapType() {
-    const type = this.type;
-    if (type.isStringMap) {
-      return `string`;
-    }
-    if (type.isNumberMap) {
-      return `number`;
-    }
-    if (type.isBooleanMap) {
-      return `boolean`;
-    }
-    if (type.isAnyMap) {
-      return `any`;
-    }
-
-    logger.debug(
-      `The attribute isn't implemented yet: ${JSON.stringify(this)}`
-    );
-
-    return `any`;
-  }
-
-  public get mapReturnType(): string {
-    const mapDataType = this.mapType;
-    if (!this.isTokenizable) {
-      return `${mapDataType} | cdktf.IResolvable`;
-    }
-
-    return mapDataType;
   }
 
   public get isStored(): boolean {
@@ -199,13 +145,15 @@ export class AttributeModel {
     if (this.getterType._type === "stored_class") {
       return {
         _type: "stored_class",
-        type: this.type.name,
+        type: this.type.inputTypeDefinition,
       };
     }
 
     return {
       _type: "set",
-      type: `${this.type.name}${this.isProvider ? " | undefined" : ""}`,
+      type: `${this.type.inputTypeDefinition}${
+        this.isProvider ? " | undefined" : ""
+      }`,
     };
   }
 
@@ -218,9 +166,7 @@ export class AttributeModel {
   }
 
   public get description(): string | undefined {
-    return this._description
-      ?.replace(/(\*\/)/gi, `*\\/`)
-      .replace(/'''/gi, "```");
+    return this._description?.replace(/'''/gi, "```");
   }
 
   public getReferencedTypes(isConfigStruct: boolean): string[] | undefined {
@@ -232,8 +178,9 @@ export class AttributeModel {
     const types: string[] = [];
 
     if (this.isAssignable) {
-      types.push(this.type.typeName);
+      types.push(attTypeStruct.name);
       types.push(attTypeStruct.mapperName);
+      types.push(attTypeStruct.hclMapperName);
     }
 
     if (
@@ -244,9 +191,25 @@ export class AttributeModel {
       types.push(attTypeStruct.listName);
     } else if (attTypeStruct.nestingMode === "map") {
       types.push(attTypeStruct.mapName);
+    } else if (attTypeStruct.nestingMode === "maplist") {
+      types.push(attTypeStruct.mapListName);
+    } else if (attTypeStruct.nestingMode === "mapset") {
+      types.push(attTypeStruct.mapListName);
+    } else if (attTypeStruct.nestingMode === "listmap") {
+      types.push(attTypeStruct.listMapName);
+    } else if (attTypeStruct.nestingMode === "setmap") {
+      types.push(attTypeStruct.listMapName);
+    } else if (
+      attTypeStruct.nestingMode === "listlist" ||
+      attTypeStruct.nestingMode === "listset" ||
+      attTypeStruct.nestingMode === "setlist" ||
+      attTypeStruct.nestingMode == "setset"
+    ) {
+      types.push(attTypeStruct.listListName);
     } else if (!isConfigStruct) {
       types.push(attTypeStruct.outputReferenceName);
     }
+    // other types of nested collections aren't supported
 
     return types;
   }

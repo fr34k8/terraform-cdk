@@ -1,12 +1,11 @@
 // Copyright (c) HashiCorp, Inc
 // SPDX-License-Identifier: MPL-2.0
 import * as yargs from "yargs";
-import { config as cfg } from "@cdktf/provider-generator";
+import { Errors, readConfigSync } from "@cdktf/commons";
 import { requireHandlers } from "./helper/utilities";
-import { Errors } from "../../lib/errors";
 import { BaseCommand } from "./helper/base-command";
 
-const config = cfg.readConfigSync();
+const config = readConfigSync();
 
 class Command extends BaseCommand {
   public readonly command = "output [stacks..]";
@@ -42,6 +41,12 @@ class Command extends BaseCommand {
         required: false,
         desc: "Whether to include sensitive outputs in the output file",
         default: false,
+      })
+      .option("skip-synth", {
+        type: "boolean",
+        default: false,
+        required: false,
+        desc: "Skip synthesis of the application, assume the synthesized Terraform code is already present and up to date",
       })
       .showHelpOnFail(true);
 

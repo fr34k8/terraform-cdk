@@ -1,6 +1,8 @@
 // Copyright (c) HashiCorp, Inc
 // SPDX-License-Identifier: MPL-2.0
-import { TestDriver } from "../../test-helper";
+import { TestDriver, onlyHcl, onlyJson } from "../../test-helper";
+import { join } from "path";
+import { existsSync } from "fs";
 
 describe("full integration test synth", () => {
   let driver: TestDriver;
@@ -20,13 +22,37 @@ describe("full integration test synth", () => {
     expect(constructs.length).not.toBe(0);
   });
 
-  test("synth generates JSON", () => {
+  onlyJson("synth generates JSON", () => {
     expect(driver.synthesizedStack("hello-terra").toString()).toMatchSnapshot();
   });
 
-  test("should not pass TF_VAR environment variables", () => {
+  onlyJson("should not pass TF_VAR environment variables", () => {
     expect(
-      driver.synthesizedStack("hello-terra").output("tfenvvaroutput")
+      driver.synthesizedStack("hello-terra").output("tf-env-var-output")
     ).toBe("no-value-found");
+  });
+});
+
+describe("full integration test HCL synth", () => {
+  let driver: TestDriver;
+
+  beforeAll(async () => {
+    process.env.TF_VAR_myvar =
+      "If you see this value we pass runtime information into the synth";
+    driver = new TestDriver(__dirname);
+    await driver.setupTypescriptProject();
+    await driver.synth();
+  });
+
+  onlyHcl("synth generates HCL, not JSON", () => {
+    expect(driver.synthesizedStackContentsRaw("hello-terra")).toMatchSnapshot();
+  });
+
+  onlyHcl("synth should generate a manifest file alongside TF file", () => {
+    const outDir = driver.stackDirectory("hello-terra");
+
+    expect(existsSync(join(outDir, "cdk.tf"))).toBeTruthy();
+    expect(existsSync(join(outDir, "metadata.json"))).toBeTruthy();
+    expect(existsSync(join(outDir, "cdk.tf.json"))).toBeFalsy();
   });
 });

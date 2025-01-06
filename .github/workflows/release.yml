@@ -4,16 +4,14 @@ on:
     branches:
       - main
       - backport-release-*
-    paths-ignore:
-      - "**.md"
-      - "docs/**"
-      - "website/**"
-      - "cdk.tf/**"
-      - "tools/update-github-project-board/**"
+  workflow_dispatch: {}
 
 env:
   SENTRY_ORG: hashicorp
   SENTRY_PROJECT: cdktf-cli
+
+concurrency:
+  group: release
 
 jobs:
   prepare-release:
@@ -22,24 +20,31 @@ jobs:
     outputs:
       tests: ${{ steps.build-test-matrix.outputs.tests }}
       version: ${{ steps.get_version.outputs.version }}
+      release_status: ${{ steps.get_release_status.outputs.release }}
     container:
       image: docker.mirror.hashicorp.services/hashicorp/jsii-terraform
     env:
       CHECKPOINT_DISABLE: "1"
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0 # gives sentry access to all previous commits
+      - name: "Add Git safe.directory" # Go 1.18+ started embedding repo info in the build and e.g. building @cdktf/hcl2json fails without this
+        # The Sentry CLI also requires this, https://github.com/actions/checkout/issues/760
+        run: git config --global --add safe.directory /__w/terraform-cdk/terraform-cdk
+      - name: ensure correct user
+        run: chown -R root /__w/terraform-cdk
       - name: version
         id: get_version
         run: |
           version=$(node -p "require('./package.json').version")
-          echo "::set-output name=version::${version}"
+          echo "version=${version}" >> $GITHUB_OUTPUT
       - name: release status
         id: get_release_status
         run: |
-          status=$(sentry-cli releases list | grep 'cdktf-cli-${{ steps.get_version.outputs.version }} ' && echo 'released' || echo 'unreleased')
-          echo "::set-output name=release::${status}"
+          status=$(sentry-cli releases list | grep -q 'cdktf-cli-${{ steps.get_version.outputs.version }} ' && echo 'released' || echo 'unreleased')
+          echo "Sentry returned: ${status}"
+          echo "release=${status}" >> $GITHUB_OUTPUT
         env:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_TOKEN }}
       - name: Create a release
@@ -49,7 +54,7 @@ jobs:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_TOKEN }}
       - name: create bundle
         run: |
-          yarn install
+          yarn install --frozen-lockfile
           tools/align-version.sh
           yarn build
           yarn package
@@ -63,50 +68,99 @@ jobs:
         env:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_TOKEN }}
       - name: Upload artifact
-        uses: actions/upload-artifact@v1
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
         with:
           name: dist
           path: dist
       - name: Upload edge-provider bindings
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
         if: ${{ !inputs.skip_setup }}
         with:
           name: edge-provider-bindings
           path: packages/@cdktf/provider-generator/edge-provider-bindings
 
   integration_test:
+    uses: ./.github/workflows/integration.yml
     needs:
       - prepare-release
-    uses: ./.github/workflows/integration.yml
+    if: needs.prepare-release.outputs.release_status == 'unreleased'
     with:
       skip_setup: true
       concurrency_group_prefix: release
     secrets: inherit
 
-  unit_test:
+  provider_integration_test:
     needs:
       - prepare-release
-    uses: ./.github/workflows/unit.yml
+    uses: ./.github/workflows/provider-integration.yml
+    if: needs.prepare-release.outputs.release_status == 'unreleased'
+    with:
+      concurrency_group_prefix: release
+      skip_setup: true
+    secrets: inherit
+
+  examples:
+    needs:
+      - prepare-release
+    uses: ./.github/workflows/examples.yml
+    if: needs.prepare-release.outputs.release_status == 'unreleased'
     with:
       concurrency_group_prefix: release
     secrets: inherit
 
+  linting:
+    needs:
+      - prepare-release
+    uses: ./.github/workflows/linting.yml
+    if: needs.prepare-release.outputs.release_status == 'unreleased'
+    with:
+      concurrency_group_prefix: release
+    secrets: inherit
+
+  unit_test:
+    uses: ./.github/workflows/unit.yml
+    needs:
+      - prepare-release
+    if: needs.prepare-release.outputs.release_status == 'unreleased'
+    strategy:
+      fail-fast: false
+      matrix:
+        package:
+          [
+            cdktf,
+            cdktf-cli,
+            "@cdktf/hcl2cdk",
+            "@cdktf/hcl2json",
+            "@cdktf/provider-generator",
+            "@cdktf/provider-schema",
+            "@cdktf/commons",
+            "@cdktf/cli-core",
+          ]
+        terraform_version: ["1.6.5", "1.5.5"]
+    with:
+      concurrency_group_prefix: release
+      package: ${{ matrix.package }}
+      terraform_version: ${{ matrix.terraform_version }}
+    secrets: inherit
+
   release_github:
     name: Release to Github
+    runs-on: ubuntu-latest
     needs:
       - prepare-release
       - integration_test
+      - provider_integration_test
       - unit_test
-    runs-on: ubuntu-latest
+    if: needs.prepare-release.outputs.release_status == 'unreleased'
     container:
       image: docker.mirror.hashicorp.services/hashicorp/jsii-terraform
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: installing dependencies
         run: |
-          yarn install
+          yarn install --frozen-lockfile
       - name: Download build artifacts
-        uses: actions/download-artifact@v1
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
         with:
           name: dist
       - name: Release to github
@@ -116,60 +170,85 @@ jobs:
 
   release_npm:
     name: Release to Github Packages NPM regitry
+    runs-on: ubuntu-latest
     needs:
       - prepare-release
       - integration_test
+      - provider_integration_test
       - unit_test
-    runs-on: ubuntu-latest
+    if: needs.prepare-release.outputs.release_status == 'unreleased'
     container:
       image: docker.mirror.hashicorp.services/hashicorp/jsii-terraform
     steps:
       - name: Download build artifacts
-        uses: actions/download-artifact@v1
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
         with:
           name: dist
+          path: dist
+      - name: ensure correct user
+        run: chown -R root /__w/terraform-cdk
       - name: Release
-        run: npx -p jsii-release jsii-release-npm
+        run: npx -p publib publib-npm
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   release_pypi:
     name: Release to PyPi
+    runs-on: ubuntu-latest
     needs:
       - prepare-release
       - integration_test
+      - provider_integration_test
       - unit_test
-    runs-on: ubuntu-latest
+    if: needs.prepare-release.outputs.release_status == 'unreleased'
     container:
       image: docker.mirror.hashicorp.services/hashicorp/jsii-terraform
     steps:
       - name: Download build artifacts
-        uses: actions/download-artifact@v1
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
         with:
           name: dist
+          path: dist
+      - name: ensure correct user
+        run: chown -R root /__w/terraform-cdk
+      # We use twine directly for publishing instead of publib-pypi
+      # Publib-pypi does the same twine command (https://github.com/cdklabs/publib/blob/main/bin/publib-pypi)
+      # but also tries to install twine which is already globally
+      # available in the docker image we use. It upgrades twine,
+      # introducing risks of breaking changes. (Though not likely, twine is ancient)
+      # We can not keep the install since the update to python 3.11 in the docker image
+      # forbids global installs since the global pip is system managed.
+      # Running this install in a virtualenv would be possible but would require
+      # changes for the publib-pypi script. This is the easiest solution for now.
       - name: Release
-        run: npx -p jsii-release jsii-release-pypi
+        run: |
+          cd dist/python
+          twine upload --verbose --skip-existing *
         env:
           TWINE_USERNAME: ${{ secrets.TWINE_USERNAME }}
           TWINE_PASSWORD: ${{ secrets.TWINE_PASSWORD }}
 
   release_maven:
     name: Release to Maven
+    runs-on: ubuntu-latest
     needs:
       - prepare-release
       - integration_test
+      - provider_integration_test
       - unit_test
-    runs-on: ubuntu-latest
+    if: needs.prepare-release.outputs.release_status == 'unreleased'
     container:
       image: docker.mirror.hashicorp.services/hashicorp/jsii-terraform
     steps:
       - name: Download build artifacts
-        uses: actions/download-artifact@v1
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
         with:
           name: dist
           path: dist
+      - name: ensure correct user
+        run: chown -R root /__w/terraform-cdk
       - name: Release
-        run: npx -p jsii-release jsii-release-maven
+        run: npx -p publib publib-maven
         env:
           MAVEN_USERNAME: ${{ secrets.MAVEN_USERNAME }}
           MAVEN_PASSWORD: ${{ secrets.MAVEN_PASSWORD }}
@@ -177,44 +256,53 @@ jobs:
           MAVEN_GPG_PRIVATE_KEY: ${{ secrets.MAVEN_GPG_PRIVATE_KEY }}
           MAVEN_GPG_PRIVATE_KEY_PASSPHRASE: ${{ secrets.MAVEN_GPG_PRIVATE_KEY_PASSPHRASE }}
           MAVEN_STAGING_PROFILE_ID: ${{ secrets.MAVEN_STAGING_PROFILE_ID }}
+          MAVEN_OPTS: "--add-opens=java.base/java.util=ALL-UNNAMED --add-opens=java.base/java.lang.reflect=ALL-UNNAMED --add-opens=java.base/java.text=ALL-UNNAMED --add-opens=java.desktop/java.awt.font=ALL-UNNAMED" # See https://stackoverflow.com/questions/70153962/nexus-staging-maven-plugin-maven-deploy-failed-an-api-incompatibility-was-enco
 
   release_nuget:
     name: Release to NuGet
+    runs-on: ubuntu-latest
     needs:
       - prepare-release
       - integration_test
+      - provider_integration_test
       - unit_test
-    runs-on: ubuntu-latest
+    if: needs.prepare-release.outputs.release_status == 'unreleased'
     container:
       image: docker.mirror.hashicorp.services/hashicorp/jsii-terraform
     steps:
       - name: Download dist
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
         with:
           name: dist
           path: dist
+      - name: ensure correct user
+        run: chown -R root /__w/terraform-cdk
       - name: Release
-        run: npx -p jsii-release jsii-release-nuget
+        run: npx -p publib publib-nuget
         env:
           NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
 
   release_golang:
     name: Release Go to Github Repo
+    runs-on: ubuntu-latest
     needs:
       - prepare-release
       - integration_test
+      - provider_integration_test
       - unit_test
-    runs-on: ubuntu-latest
+    if: needs.prepare-release.outputs.release_status == 'unreleased'
     container:
       image: docker.mirror.hashicorp.services/hashicorp/jsii-terraform
     steps:
       - name: Download dist
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
         with:
           name: dist
           path: dist
+      - name: ensure correct user
+        run: chown -R root /__w/terraform-cdk
       - name: Release
-        run: npx -p jsii-release jsii-release-golang
+        run: npx -p publib publib-golang
         env:
           GITHUB_TOKEN: ${{ secrets.TERRAFORM_CDK_GO_REPO_GITHUB_TOKEN }}
           GIT_USER_NAME: "CDK for Terraform Team"
@@ -222,52 +310,62 @@ jobs:
 
   release_sentry:
     name: Finalize the sentry release
+    runs-on: ubuntu-latest
     needs:
       - prepare-release
       - integration_test
+      - provider_integration_test
       - unit_test
-    runs-on: ubuntu-latest
+    if: needs.prepare-release.outputs.release_status == 'unreleased'
     container:
       image: docker.mirror.hashicorp.services/hashicorp/jsii-terraform
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: version
         id: get_version
         run: |
           version=$(node -p "require('./package.json').version")
-          echo "::set-output name=version::${version}"
+          echo "version=${version}" >> $GITHUB_OUTPUT
       - name: release status
         id: get_release_status
         run: |
-          status=$(sentry-cli releases list | grep 'cdktf-cli-${{ steps.get_version.outputs.version }} ' && echo 'released' || echo 'unreleased')
-          echo "::set-output name=release::${status}"
+          status=$(sentry-cli releases list | grep 'cdktf-cli-${{ steps.get_version.outputs.version }} ' | grep -q 'unreleased' && echo "unreleased" || echo "released")
+          echo "Sentry returned: ${status}"
+          echo "release=${status}" >> $GITHUB_OUTPUT
         env:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_TOKEN }}
-      - name: Create a release
+      - name: Finalize the release
         if: steps.get_release_status.outputs.release == 'unreleased'
         run: sentry-cli releases finalize cdktf-cli-${{ steps.get_version.outputs.version }}
         env:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_TOKEN }}
 
-  release_homebrew:
-    name: Release to Homebrew
-    # The branch or tag ref that triggered the workflow run.
-    if: startsWith(github.event.head_commit.message, 'Bump version')
-    needs: release_npm
+  report:
+    name: Report status
     runs-on: ubuntu-latest
+    if: ${{ failure() }}
+    needs:
+      - examples
+      - integration_test
+      - provider_integration_test
+      - linting
+      - prepare-release
+      - release_github
+      - release_golang
+      - release_maven
+      - release_npm
+      - release_nuget
+      - release_pypi
+      - release_sentry
+      - unit_test
     steps:
-      # extract version number from package.json
-      - uses: actions/checkout@v2
-      - name: version
-        id: get_version
-        run: |
-          version=$(node -p "require('./package.json').version")
-          echo "::set-output name=version::${version}"
-      # A PR will be sent to github.com/Homebrew/homebrew-core to update this formula:
-      - uses: mislav/bump-homebrew-formula-action@v1
+      - name: Send failures to Slack
+        uses: slackapi/slack-github-action@37ebaef184d7626c5f204ab8d3baff4262dd30f0 # v1.27.0
         with:
-          formula-name: cdktf
-          download-url: https://registry.npmjs.org/cdktf-cli/-/cdktf-cli-${{ steps.get_version.outputs.version }}.tgz
-          commit-message: cdktf ${{ steps.get_version.outputs.version }}
+          payload: |
+            {
+              "name": "main",
+              "run_url": "https://github.com/hashicorp/terraform-cdk/actions/runs/${{ github.run_id }}"
+            }
         env:
-          COMMITTER_TOKEN: ${{ secrets.HOMEBREW_COMMITTER_TOKEN }}
+          SLACK_WEBHOOK_URL: ${{ secrets.FAILURE_SLACK_WEBHOOK_URL }}

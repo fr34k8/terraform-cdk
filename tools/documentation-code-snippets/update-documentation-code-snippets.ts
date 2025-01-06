@@ -18,7 +18,7 @@ const DOCS_DIRECTORY = resolveRepoPath("website/docs");
 const createCodeBlockRegex = () =>
   /<!--\s*#NEXT_CODE_BLOCK_SOURCE:(?<language>[\w]*)\s*(?<sourcePath>[^#]*)#(?<snippetId>[^ ]*)\s*-->/g;
 const createCodeSnippetRegex = (language: string) =>
-  new RegExp(`\`\`\`${language}.*?\`\`\``, "s"); // s lets . match newlines as well, ? makes it non greedy to only match until the next "```"
+  new RegExp(`\`\`\`${language}.*?\`\`\``, "sg"); // s lets . match newlines as well, ? makes it non greedy to only match until the next "```", g = global allows starting at a given index
 
 type CodeBlockTarget = {
   language: string; // as used in the next codeblock e.g. "```ts"
@@ -223,10 +223,34 @@ async function collectSnippetsFromFile(
         return Math.min(leadingWhitespace, currentMin);
       }, Number.MAX_VALUE);
 
+      const whitespaceTrimmedLines = snippet.lines.map((line) =>
+        line.substring(whiteSpacesToRemove)
+      );
+
+      function numberOfPrefixedTabs(input: string) {
+        let count = 0;
+        for (const char of input) {
+          if (char === "\t") {
+            count++;
+          } else {
+            break;
+          }
+        }
+        return count;
+      }
+
+      const tabsToRemove = whitespaceTrimmedLines.reduce((currentMin, line) => {
+        if (line === "") return currentMin; // ignore empty lines
+        if (line === "\n") return currentMin; // ignore newline lines
+
+        const leadingTabs = numberOfPrefixedTabs(line);
+        return Math.min(leadingTabs, currentMin);
+      }, Number.MAX_VALUE);
+
       return {
         snippetId: id,
-        content: snippet.lines
-          .map((line) => line.substring(whiteSpacesToRemove))
+        content: whitespaceTrimmedLines
+          .map((line) => line.substring(tabsToRemove))
           .join("\n"),
         sourcePath,
       };
@@ -269,8 +293,16 @@ ${requestedSnippets
     const files = (await execa("git", ["ls-files"], { cwd: sourcePath })).stdout
       .split("\n")
       .map((f) => `${sourcePath}/${f}`);
+    // files that haven't been git add'ed yet
+    const notYetAddedFiles = (
+      await execa("git", ["ls-files", "--exclude-standard", "--others"], {
+        cwd: sourcePath,
+      })
+    ).stdout
+      .split("\n")
+      .map((f) => `${sourcePath}/${f}`);
 
-    for (const filename of files) {
+    for (const filename of [...files, ...notYetAddedFiles]) {
       const containsSources = await fileContainsCodeBlockSources(filename);
       if (containsSources) {
         sourceFilesWithCodeBlock.push({

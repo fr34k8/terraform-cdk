@@ -1,11 +1,13 @@
 // Copyright (c) HashiCorp, Inc
 // SPDX-License-Identifier: MPL-2.0
 import * as fs from "fs";
-import { withTempDir } from "../../util";
-import { Language, ConstructsMaker } from "../constructs-maker";
+import {
+  Language,
+  TerraformModuleConstraint,
+  withTempDir,
+} from "@cdktf/commons";
+import { ConstructsMaker } from "../constructs-maker";
 import * as path from "path";
-
-import { TerraformModuleConstraint } from "../../config";
 
 export function expectModuleToMatchSnapshot(
   testName: string,
@@ -34,10 +36,13 @@ export function expectModuleToMatchSnapshot(
       const workdir = path.join(curdir, "work");
 
       const maker = new ConstructsMaker(
-        { codeMakerOutput: workdir, targetLanguage: Language.TYPESCRIPT },
-        [constraint]
+        {
+          codeMakerOutput: workdir,
+          targetLanguage: Language.TYPESCRIPT,
+        },
+        process.env.CDKTF_EXPERIMENTAL_PROVIDER_SCHEMA_CACHE_PATH
       );
-      await maker.generate();
+      await maker.generate([constraint]);
 
       const output = fs.readFileSync(
         path.join(workdir, "modules/module.ts"),

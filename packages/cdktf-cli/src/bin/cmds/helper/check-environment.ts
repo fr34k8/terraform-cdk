@@ -1,16 +1,18 @@
 // Copyright (c) HashiCorp, Inc
 // SPDX-License-Identifier: MPL-2.0
 import * as semver from "semver";
+
 import {
+  Errors,
   getGoVersion,
+  getPythonVersion,
   getLanguage,
   getNodeVersion,
   getPackageVersion,
-} from "../../../lib/debug";
-import { Errors } from "../../../lib/errors";
-import { logger } from "../../../lib/logging";
-import { DISPLAY_VERSION } from "../../../lib/version";
-import { DISABLE_VERSION_CHECK } from "../../../lib/environment";
+  logger,
+  DISPLAY_VERSION,
+  DISABLE_VERSION_CHECK,
+} from "@cdktf/commons";
 
 function throwIfLowerVersion(
   language: string,
@@ -43,9 +45,14 @@ async function checkGoVersion() {
   throwIfLowerVersion("Go", "1.16.0", out);
 }
 
+async function checkPythonVersion() {
+  const out = await getPythonVersion();
+  throwIfLowerVersion("Python", "3.8.0", out);
+}
+
 async function checkNodeVersion() {
   const out = await getNodeVersion();
-  throwIfLowerVersion("Node.js", "14.17.0", out);
+  throwIfLowerVersion("Node.js", "18.12.0", out);
 }
 
 export async function checkEnvironment() {
@@ -54,6 +61,10 @@ export async function checkEnvironment() {
   switch (getLanguage()) {
     case "go":
       await checkGoVersion();
+      break;
+    case "python":
+      await checkPythonVersion();
+      break;
   }
 }
 

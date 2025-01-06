@@ -2,8 +2,7 @@
 // SPDX-License-Identifier: MPL-2.0
 import { useApp } from "ink";
 import { useEffect, useState } from "react";
-import { CdktfProject, ProjectUpdate } from "../../../../lib/";
-import { CdktfStack } from "../../../../lib/cdktf-stack";
+import { CdktfProject, ProjectUpdate, CdktfStack } from "@cdktf/cli-core";
 
 export type LogEntry = {
   content: string;
@@ -14,6 +13,7 @@ export type LogEntry = {
 type CdktfProjectOpts = {
   outDir: string;
   synthCommand: string;
+  hcl?: boolean;
 };
 
 export type Status =
@@ -35,6 +35,12 @@ export type Status =
       approve: () => void;
       dismiss: () => void;
       stop: () => void;
+    }
+  | {
+      type: "waiting for override of sentinel policy check failure";
+      stackName: string;
+      override: () => void;
+      reject: () => void;
     }
   | {
       type: "done";
@@ -61,6 +67,7 @@ export function useCdktfProject<T>(
   useEffect(() => {
     const project = new CdktfProject({
       outDir: opts.outDir,
+      hcl: opts.hcl,
       synthCommand: opts.synthCommand,
       onUpdate: (update: ProjectUpdate) => {
         if (["synthesizing"].includes(update.type)) {
@@ -72,6 +79,13 @@ export function useCdktfProject<T>(
             approve: update.approve,
             dismiss: update.dismiss,
             stop: update.stop,
+          });
+        } else if (update.type === "waiting for sentinel override") {
+          setStatus({
+            type: "waiting for override of sentinel policy check failure",
+            stackName: update.stackName,
+            override: update.override,
+            reject: update.reject,
           });
         } else {
           updateRunningStatus(project);
@@ -114,9 +128,16 @@ export function useCdktfProject<T>(
       .then((value) => {
         setReturnValue(value);
         setStatus({ type: "done" });
+
+        setTimeout(() => {
+          exit();
+          if (process.platform === "win32") {
+            process.exit(0);
+          }
+        }, 100);
       })
       .catch((err) => {
-        exit(err);
+        exit(new Error(err));
       });
   }, []);
 

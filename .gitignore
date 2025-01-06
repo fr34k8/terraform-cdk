@@ -13,7 +13,6 @@ node_modules
 .cdk.staging
 cdktf.out
 
-tsconfig.json
 
 **/.DS_Store
 **/.gen
@@ -23,6 +22,7 @@ tsconfig.json
 **/.terraform
 **/*.tfstate
 **/*.tfstate.backup
+**/*.d.ts.map
 
 # https://github.com/github/gitignore/blob/master/Global/VisualStudioCode.gitignore
 .vscode/*
@@ -37,3 +37,5 @@ terraform-cdk.github-issues
 .idea
 tsconfig.tsbuildinfo
 examples/java/gradle-shared-module/.gradle/
+
+.nx/

@@ -1,12 +1,5 @@
 name: Integration Tests
 on:
-  pull_request:
-    paths-ignore:
-      - "**.md"
-      - "docs/**"
-      - "website/**"
-      - "cdk.tf/**"
-      - "tools/update-github-project-board/**"
   workflow_call:
     inputs:
       skip_setup:
@@ -35,19 +28,34 @@ jobs:
     timeout-minutes: 60
 
     steps:
-      - uses: actions/checkout@v2
-      - name: Get yarn cache directory path
-        id: yarn-cache-dir-path
-        run: echo "::set-output name=dir::$(yarn cache dir)"
-      - uses: actions/cache@v2
-        id: yarn-cache # use this to check for `cache-hit` (`steps.yarn-cache.outputs.cache-hit != 'true'`)
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: "Add Git safe.directory" # Go 1.18+ started embedding repo info in the build and e.g. building @cdktf/hcl2json fails without this
+        run: git config --global --add safe.directory /__w/terraform-cdk/terraform-cdk
+      - name: ensure correct user
+        run: chown -R root /__w/terraform-cdk
+      # Setup caches for yarn, and go
+      - name: Get cache directory paths
+        id: global-cache-dir-path
+        run: |
+          echo "yarn=$(yarn cache dir)" >> $GITHUB_OUTPUT
+          mkdir -p /usr/local/share/.cache/go
+          echo "go=/usr/local/share/.cache/go" >> $GITHUB_OUTPUT
+      - uses: actions/cache@6849a6489940f00c2f30c0fb92c6274307ccb58a # v4.1.2
         with:
-          path: ${{ steps.yarn-cache-dir-path.outputs.dir }}
-          key: ${{ runner.os }}-yarn-${{ hashFiles('**/yarn.lock') }}
+          path: ${{ steps.global-cache-dir-path.outputs.yarn }}
+          key: yarn-${{ runner.os }}-${{ hashFiles('**/yarn.lock') }}-integration
           restore-keys: |
-            ${{ runner.os }}-yarn-
+            yarn-${{ runner.os }}-${{ hashFiles('**/yarn.lock') }}-
+            yarn-${{ runner.os }}-
+      - uses: actions/cache@6849a6489940f00c2f30c0fb92c6274307ccb58a # v4.1.2
+        with:
+          path: ${{ steps.global-cache-dir-path.outputs.go }}
+          key: go-${{ runner.os }}-${{ hashFiles('**/go.sum') }}-integration
+          restore-keys: |
+            go-${{ runner.os }}-${{ hashFiles('**/go.sum') }}-
+            go-${{ runner.os }}-
       - name: install dependencies
-        run: yarn install
+        run: yarn install --frozen-lockfile --prefer-offline
       - name: set version
         if: ${{ !inputs.skip_setup }}
         run: tools/align-version.sh "-dev.$GITHUB_RUN_ID"
@@ -58,21 +66,22 @@ jobs:
           yarn package
         env:
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          GOCACHE: ${{ steps.global-cache-dir-path.outputs.go }}
       - name: Upload dist
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
         if: ${{ !inputs.skip_setup }}
         with:
           name: dist
           path: dist
       - name: Upload edge-provider bindings
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
         if: ${{ !inputs.skip_setup }}
         with:
           name: edge-provider-bindings
           path: packages/@cdktf/provider-generator/edge-provider-bindings
       - name: installing test dependencies
         run: |
-          cd test && yarn install
+          cd test && yarn install --frozen-lockfile --prefer-offline
       - id: build-test-matrix
         run: |
           ./tools/build-test-matrix.sh
@@ -83,22 +92,60 @@ jobs:
     strategy:
       fail-fast: false
       matrix: ${{fromJSON(needs.prepare-integration-tests.outputs.tests)}}
+      max-parallel: 30 # too many in parallel will give HTTP 429 errors from GH when checking out the source for example
     container:
       image: docker.mirror.hashicorp.services/hashicorp/jsii-terraform
     env:
       CHECKPOINT_DISABLE: "1"
       TERRAFORM_VERSION: ${{ matrix.terraform }}
+      GITHUB_API_TOKEN_CDKTF: ${{ secrets.GITHUB_TOKEN }}
+      SYNTH_HCL_OUTPUT: ${{ matrix.hclOutput }}
     timeout-minutes: 60
 
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: ensure correct user
+        run: chown -R root /__w/terraform-cdk
+      # Setup caches for yarn, terraform, and go
+      - name: Get cache directory paths
+        id: global-cache-dir-path
+        run: |
+          echo "yarn=$(yarn cache dir)" >> $GITHUB_OUTPUT
+          mkdir -p /usr/local/share/.cache/terraform
+          echo "terraform=/usr/local/share/.cache/terraform" >> $GITHUB_OUTPUT
+          mkdir -p /usr/local/share/.cache/go
+          echo "go=/usr/local/share/.cache/go" >> $GITHUB_OUTPUT
+      # only restore as an individual cache as per matrix explodes our cache usage
+      - uses: actions/cache/restore@6849a6489940f00c2f30c0fb92c6274307ccb58a # v4.1.2
+        with:
+          path: ${{ steps.global-cache-dir-path.outputs.yarn }}
+          key: yarn-${{ runner.os }}-${{ hashFiles('**/yarn.lock') }}-integration
+          restore-keys: |
+            yarn-${{ runner.os }}-${{ hashFiles('**/yarn.lock') }}-
+            yarn-${{ runner.os }}-
+      - uses: actions/cache@6849a6489940f00c2f30c0fb92c6274307ccb58a # v4.1.2
+        with:
+          path: ${{ steps.global-cache-dir-path.outputs.terraform }}
+          # put matrix before integration to not restore caches from other sibling matrix jobs
+          key: terraform-${{ runner.os }}-${{ matrix.terraform }}-matrix-integration-${{ matrix.target }}
+          restore-keys: |
+            terraform-${{ runner.os }}-${{ matrix.terraform }}-
+      - uses: actions/cache@6849a6489940f00c2f30c0fb92c6274307ccb58a # v4.1.2
+        with:
+          path: ${{ steps.global-cache-dir-path.outputs.go }}
+          # put matrix before integration to not restore caches from other sibling matrix jobs
+          key: go-${{ runner.os }}-${{ hashFiles('**/go.sum') }}-matrix-integration-${{ matrix.target }}
+          restore-keys: |
+            go-${{ runner.os }}-${{ hashFiles('**/go.sum') }}-integration
+            go-${{ runner.os }}-${{ hashFiles('**/go.sum') }}
+            go-${{ runner.os }}-
       - name: Download dist
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
         with:
           name: dist
           path: dist
       - name: Download edge-provider bindings
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
         with:
           name: edge-provider-bindings
           path: test/edge-provider-bindings
@@ -111,38 +158,78 @@ jobs:
           TERRAFORM_CLOUD_TOKEN: ${{ secrets.TERRAFORM_CLOUD_TOKEN }}
           TERRAFORM_BINARY_NAME: "terraform${{ matrix.terraform }}"
           NODE_OPTIONS: "--max-old-space-size=7168"
+          TF_PLUGIN_CACHE_DIR: ${{ steps.global-cache-dir-path.outputs.terraform }}
+          GOCACHE: ${{ steps.global-cache-dir-path.outputs.go }}
 
   windows_integration:
     needs: prepare-integration-tests
-    runs-on: windows-2019
+    runs-on: windows-2022
+    if: false # Ignore windows integration tests for release atm
     strategy:
       fail-fast: false
       matrix: ${{fromJSON(needs.prepare-integration-tests.outputs.tests)}}
+      max-parallel: 30 # too many in parallel will give HTTP 429 errors from GH when checking out the source for example
     env:
       CHECKPOINT_DISABLE: "1"
       TERRAFORM_VERSION: ${{ matrix.terraform }}
+      GITHUB_API_TOKEN_CDKTF: ${{ secrets.GITHUB_TOKEN }}
     timeout-minutes: 60
 
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      # Setup caches for yarn, terraform, and go
+      - name: Get cache directory paths
+        id: global-cache-dir-path
+        shell: bash
+        run: |
+          echo "yarn=$(yarn cache dir)" >> $GITHUB_OUTPUT
+          mkdir -p /usr/local/share/.cache/terraform
+          echo "terraform=/usr/local/share/.cache/terraform" >> $GITHUB_OUTPUT
+          mkdir -p /usr/local/share/.cache/go
+          echo "go=/usr/local/share/.cache/go" >> $GITHUB_OUTPUT
+      # only restore as an individual cache as per matrix explodes our cache usage
+      - uses: actions/cache/restore@6849a6489940f00c2f30c0fb92c6274307ccb58a # v4.1.2
+        with:
+          path: ${{ steps.global-cache-dir-path.outputs.yarn }}
+          key: yarn-${{ runner.os }}-${{ hashFiles('**/yarn.lock') }}-integration
+          restore-keys: |
+            yarn-${{ runner.os }}-${{ hashFiles('**/yarn.lock') }}-
+            yarn-${{ runner.os }}-
+      - uses: actions/cache@6849a6489940f00c2f30c0fb92c6274307ccb58a # v4.1.2
+        with:
+          path: ${{ steps.global-cache-dir-path.outputs.terraform }}
+          # put matrix before integration to not restore caches from other sibling matrix jobs
+          key: terraform-${{ runner.os }}-${{ matrix.terraform }}-matrix-integration-${{ matrix.target }}
+          restore-keys: |
+            terraform-${{ runner.os }}-${{ matrix.terraform }}-
+      - uses: actions/cache@6849a6489940f00c2f30c0fb92c6274307ccb58a # v4.1.2
+        with:
+          path: ${{ steps.global-cache-dir-path.outputs.go }}
+          # put matrix before integration to not restore caches from other sibling matrix jobs
+          key: go-${{ runner.os }}-${{ hashFiles('**/go.sum') }}-matrix-integration-${{ matrix.target }}
+          restore-keys: |
+            go-${{ runner.os }}-${{ hashFiles('**/go.sum') }}-integration
+            go-${{ runner.os }}-${{ hashFiles('**/go.sum') }}-
+            go-${{ runner.os }}-
       - name: HashiCorp - Setup Terraform
-        uses: hashicorp/setup-terraform@v1
+        uses: hashicorp/setup-terraform@633666f66e0061ca3b725c73b2ec20cd13a8fdd1
         with:
           terraform_wrapper: false
           terraform_version: ${{ matrix.terraform }}
       - name: Install pipenv
         run: pip install pipenv
       - name: Install Go
-        uses: actions/setup-go@v2
+        uses: actions/setup-go@41dfa10bad2bb2ae585af6ee5bb4d7d973ad74ed # v5.1.0
         with:
           go-version: 1.18.x
+          cache: false # This is disabled because we don't have a go.sum file and setup-go expects it to use caching. Thus, caching is always broken anyways
       - name: Download dist
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
         with:
           name: dist
           path: dist
       - name: Download edge-provider bindings
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
         with:
           name: edge-provider-bindings
           path: test/edge-provider-bindings
@@ -157,3 +244,5 @@ jobs:
           TEST_TARGET: ${{ matrix.target }}
           TERRAFORM_CLOUD_TOKEN: ${{ secrets.TERRAFORM_CLOUD_TOKEN }}
           NODE_OPTIONS: "--max-old-space-size=7168"
+          TF_PLUGIN_CACHE_DIR: ${{ steps.global-cache-dir-path.outputs.terraform }}
+          GOCACHE: ${{ steps.global-cache-dir-path.outputs.go }}

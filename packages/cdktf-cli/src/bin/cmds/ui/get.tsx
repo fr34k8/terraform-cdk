@@ -1,16 +1,29 @@
+/**
+ * Copyright (c) HashiCorp, Inc.
+ * SPDX-License-Identifier: MPL-2.0
+ */
+
 import React, { Fragment } from "react";
 
 import { Text, Box, useApp, Newline } from "ink";
 import Spinner from "ink-spinner";
-import { Language, GetOptions, config } from "@cdktf/provider-generator";
-import { sendTelemetry } from "../../../lib/checkpoint";
-import { get, GetStatus as Status } from "../../../lib";
+import { GetOptions } from "@cdktf/provider-generator";
+import {
+  IsErrorType,
+  Language,
+  sendTelemetry,
+  TerraformDependencyConstraint,
+} from "@cdktf/commons";
+import { get, GetStatus as Status } from "@cdktf/cli-core";
 
 interface GetConfig {
   codeMakerOutput: string;
   language: Language;
-  constraints: config.TerraformDependencyConstraint[];
+  constraints: TerraformDependencyConstraint[];
   parallelism: number;
+  force?: boolean;
+  silent?: boolean;
+  providerSchemaCachePath?: string;
 }
 
 export const Get = ({
@@ -18,6 +31,9 @@ export const Get = ({
   language,
   constraints,
   parallelism,
+  force,
+  silent = false,
+  providerSchemaCachePath,
 }: GetConfig): React.ReactElement => {
   const [currentStatus, setCurrentStatus] = React.useState<Status>(
     Status.STARTING
@@ -36,19 +52,22 @@ export const Get = ({
         await get({
           constraints,
           constructsOptions,
+          cleanDirectory: force,
           onUpdate: setCurrentStatus,
-          reportTelemetry: (payload: {
-            targetLanguage: string;
-            trackingPayload: Record<string, any>;
-          }) =>
-            sendTelemetry("get", {
+          providerSchemaCachePath,
+          reportTelemetry: async (payload) =>
+            await sendTelemetry("get", {
               language: payload.targetLanguage,
               ...payload.trackingPayload,
             }),
         });
-      } catch (e) {
-        console.error(e);
-        exit(e);
+      } catch (e: any) {
+        // No stack trace for usage errors, as they explain themselves
+        if (!IsErrorType(e, "Usage")) {
+          console.error(e);
+        }
+
+        exit(new Error(e));
       }
     };
     runGet();
@@ -89,6 +108,10 @@ export const Get = ({
       )}
     </Text>
   );
+
+  if (silent) {
+    return <Text></Text>;
+  }
 
   return (
     <Box>

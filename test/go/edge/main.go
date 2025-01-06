@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package main
 
 import (
@@ -19,6 +22,10 @@ func NewReferenceStack(scope constructs.Construct, id string) cdktf.TerraformSta
 		Reqstr:  jsii.String("reqstr"),
 		Reqnum:  jsii.Number(123),
 		Reqbool: jsii.Bool(true),
+	})
+
+	optionalattributeresource.NewOptionalAttributeResource(stack, jsii.String("null"), &optionalattributeresource.OptionalAttributeResourceConfig{
+		Bool: cdktf.Token_NullValue(),
 	})
 
 	res := optionalattributeresource.NewOptionalAttributeResource(stack, jsii.String("test"), &optionalattributeresource.OptionalAttributeResourceConfig{})
@@ -280,7 +287,7 @@ func NewIteratorStack(scope constructs.Construct, id string) cdktf.TerraformStac
 }
 
 func main() {
-	app := cdktf.Testing_StubVersion(cdktf.NewApp(&cdktf.AppOptions{StackTraces: jsii.Bool(false)}))
+	app := cdktf.Testing_StubVersion(cdktf.NewApp(&cdktf.AppConfig{StackTraces: jsii.Bool(false)}))
 
 	NewReferenceStack(app, "reference")
 	NewProviderStack(app, "provider")

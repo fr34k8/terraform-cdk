@@ -2,9 +2,8 @@
 // SPDX-License-Identifier: MPL-2.0
 import yargs from "yargs";
 
-import { templates } from "./helper/init-templates";
 import { readPackageJson, requireHandlers } from "./helper/utilities";
-import { Errors } from "../../lib/errors";
+import { Errors } from "@cdktf/commons";
 import { BaseCommand } from "./helper/base-command";
 
 const pkg = readPackageJson();
@@ -17,9 +16,7 @@ class Command extends BaseCommand {
       .showHelpOnFail(true)
       .option("template", {
         type: "string",
-        desc: `The template to be used to create a new project. Either URL to zip file or one of the built-in templates: [${templates
-          .map((t) => `"${t}"`)
-          .join(", ")}]`,
+        desc: `The template to be used to create a new project. Either URL to zip file or one of the built-in templates.`,
       })
       .option("project-name", {
         type: "string",
@@ -50,6 +47,19 @@ class Command extends BaseCommand {
       .option("enable-crash-reporting", {
         type: "boolean",
         desc: "Enable crash reporting for the CLI, refer to https://cdk.tf/crash-reporting for more details",
+      })
+      .option("providers", {
+        describe: "Providers to add to your project",
+        type: "array",
+        default: [],
+      })
+      .option("providers-force-local", {
+        type: "boolean",
+        desc: "Force local installation of provider specified in init",
+      })
+      .option("tfe-hostname", {
+        type: "string",
+        desc: "The hostname of the Terraform Enterprise instance to use for remote state storage",
       })
       .strict();
 

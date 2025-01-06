@@ -44,6 +44,10 @@ export class Struct {
     return `${downcaseFirst(this.name)}ToTerraform`;
   }
 
+  public get hclMapperName(): string {
+    return `${downcaseFirst(this.name)}ToHclTerraform`;
+  }
+
   public get outputReferenceName(): string {
     return `${this.name}OutputReference`;
   }
@@ -54,6 +58,18 @@ export class Struct {
 
   public get mapName(): string {
     return `${this.name}Map`;
+  }
+
+  public get mapListName(): string {
+    return `${this.name}MapList`;
+  }
+
+  public get listMapName(): string {
+    return `${this.name}ListMap`;
+  }
+
+  public get listListName(): string {
+    return `${this.name}ListList`;
   }
 
   public get isProvider(): boolean {

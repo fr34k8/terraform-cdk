@@ -4,9 +4,10 @@ import { Construct } from "constructs";
 import { TerraformElement } from "./terraform-element";
 import { keysToSnakeCase, deepMerge } from "./util";
 import { Token } from "./tokens";
-import { Expression, ref } from "./tfExpression";
+import { ref } from "./tfExpression";
 import { IResolvable } from "./tokens/resolvable";
 import { ITerraformAddressable } from "./terraform-addressable";
+import { TerraformVariableValidationConfig } from "./terraform-conditions";
 
 // eslint-disable-next-line jsdoc/require-jsdoc
 export abstract class VariableType {
@@ -54,11 +55,6 @@ export abstract class VariableType {
   }
 }
 
-export interface TerraformVariableValidationConfig {
-  readonly condition: Expression;
-  readonly errorMessage: string;
-}
-
 export interface TerraformVariableConfig {
   readonly default?: any;
   readonly description?: string;
@@ -82,7 +78,7 @@ export interface TerraformVariableConfig {
    * - object({\<ATTR NAME\> = \<TYPE\>, ... })
    * - tuple([\<TYPE\>, ...])
    *
-   * The keyword any may be used to indicate that any type is acceptable. For more information on the meaning and behavior of these different types, as well as detailed information about automatic conversion of complex types, see {@link https://www.terraform.io/docs/configuration/types.html|Type Constraints}.
+   * The keyword any may be used to indicate that any type is acceptable. For more information on the meaning and behavior of these different types, as well as detailed information about automatic conversion of complex types, refer to {@link https://developer.hashicorp.com/terraform/language/expressions/type-constraints Type Constraints}.
    *
    * If both the type and default arguments are specified, the given default value must be convertible to the specified type.
    */
@@ -160,6 +156,48 @@ export class TerraformVariable
     return ref(`var.${this.friendlyUniqueId}`, this.cdktfStack);
   }
 
+  public synthesizeHclAttributes(): { [key: string]: any } {
+    const attrs = {
+      default: {
+        value: this.default,
+        type: "any",
+      },
+
+      description: {
+        value: this.description,
+        type: "simple",
+        storageClassType: "string",
+      },
+      type: {
+        value: this.type,
+        type: "type",
+      },
+      sensitive: {
+        value: this.sensitive,
+        type: "simple",
+        storageClassType: "boolean",
+      },
+      nullable: {
+        value: this.nullable,
+        type: "simple",
+        storageClassType: "boolean",
+      },
+      validation: {
+        value: this.validation?.map((validation) => ({
+          error_message: validation.errorMessage,
+          condition: validation.condition,
+        })),
+        isBlock: true,
+        type: "list",
+        storageClassType: "objectList",
+      },
+    };
+
+    return Object.fromEntries(
+      Object.entries(attrs).filter(([_, value]) => !!value?.value)
+    );
+  }
+
   public synthesizeAttributes(): { [key: string]: any } {
     return {
       default: this.default,
@@ -174,6 +212,17 @@ export class TerraformVariable
     };
   }
 
+  public toHclTerraform(): any {
+    return {
+      variable: {
+        [this.friendlyUniqueId]: deepMerge(
+          keysToSnakeCase(this.synthesizeHclAttributes()),
+          this.rawOverrides
+        ),
+      },
+    };
+  }
+
   public toTerraform(): any {
     return {
       variable: {
@@ -183,5 +232,12 @@ export class TerraformVariable
         ),
       },
     };
+  }
+
+  /**
+   * @returns a string token referencing the value of this variable
+   */
+  toString(): string {
+    return this.stringValue;
   }
 }

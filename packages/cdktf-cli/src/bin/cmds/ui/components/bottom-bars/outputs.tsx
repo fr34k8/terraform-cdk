@@ -1,7 +1,12 @@
+/**
+ * Copyright (c) HashiCorp, Inc.
+ * SPDX-License-Identifier: MPL-2.0
+ */
+
 import React from "react";
 import { Text, Box } from "ink";
 import { Outputs } from "../outputs";
-import { NestedTerraformOutputs } from "../../../../../lib/output";
+import { NestedTerraformOutputs } from "@cdktf/cli-core";
 
 type Props = {
   outputs?: NestedTerraformOutputs;

@@ -1,9 +1,16 @@
 // Copyright (c) HashiCorp, Inc
 // SPDX-License-Identifier: MPL-2.0
-import { Testing, TerraformStack, TerraformElement, Fn } from "../lib";
+import {
+  Testing,
+  TerraformStack,
+  TerraformElement,
+  Fn,
+  TerraformIterator,
+} from "../lib";
 import { TestProvider, TestResource, OtherTestResource } from "./helper";
 import { TestDataSource } from "./helper/data-source";
 import { TerraformOutput } from "../lib/terraform-output";
+import { Construct } from "constructs";
 
 test("minimal configuration", () => {
   const app = Testing.app();
@@ -198,9 +205,11 @@ test("tokens as ids", () => {
     new TestResource(stack, `resource-${foo.stringValue}`, {
       name: "foo",
     });
-  }).toThrowErrorMatchingInlineSnapshot(
-    `"You cannot use a Token (e.g. a reference to an attribute) as the id of a construct"`
-  );
+  }).toThrowErrorMatchingInlineSnapshot(`
+    "You cannot use a token (e.g., a reference to an attribute) as the id of a construct. Ids of constructs must be known at synthesis time, and token values are only known when Terraform runs. Please use a concrete value for your constructs ID instead.
+    You passed the following id: "resource-\${TfToken[TOKEN.8]}"
+    "
+  `);
 });
 
 test("number[] attributes", () => {
@@ -319,4 +328,391 @@ it("maintains the same order of provisioner", () => {
   });
 
   expect(Testing.synth(stack)).toMatchSnapshot();
+});
+
+it("supports resource and attribute references in lifecycle.replaceTriggeredBy", () => {
+  const app = Testing.app();
+  const stack = new TerraformStack(app, "test");
+  new TestProvider(stack, "provider", {});
+
+  const other = new TestResource(stack, "other", { name: "other" });
+
+  new TestResource(stack, "simple", {
+    name: "foo",
+    lifecycle: {
+      replaceTriggeredBy: [other, other.stringValue],
+    },
+  });
+
+  expect(Testing.synth(stack)).toMatchSnapshot();
+});
+
+test("includes import block when import is present", () => {
+  const app = Testing.app();
+  const stack = new TerraformStack(app, "test");
+  new TestProvider(stack, "provider", {});
+
+  new TestResource(stack, "test", {
+    name: "foo",
+  }).importFrom("testId");
+  expect(Testing.synth(stack)).toMatchSnapshot();
+});
+
+test("includes import block when import is present, provider given", () => {
+  const app = Testing.app();
+  const stack = new TerraformStack(app, "test");
+  const provider = new TestProvider(stack, "provider", {
+    alias: "foo",
+  });
+  new TestResource(stack, "test", {
+    name: "foo",
+  }).importFrom("testId", provider);
+  expect(Testing.synth(stack)).toMatchSnapshot();
+});
+
+it("moves resource to greater nesting in contained construct", () => {
+  const app = Testing.app();
+  const stack = new TerraformStack(app, "test");
+  new TestProvider(stack, "provider", {});
+
+  const construct = new Construct(stack, "construct");
+  const nestedContruct = new Construct(construct, "nested-construct");
+
+  new TestResource(nestedContruct, "simple", {
+    name: "foo",
+    provisioners: [
+      { type: "local-exec", command: "echo 'hello' > world.txt" },
+      { type: "local-exec", command: "echo 'hello' > world1.txt" },
+      { type: "local-exec", command: "echo 'hello' > world2.txt" },
+    ],
+  }).addMoveTarget("test");
+
+  new TestResource(stack, "simple", {
+    name: "foo",
+    provisioners: [
+      { type: "local-exec", command: "echo 'hello' > world.txt" },
+      { type: "local-exec", command: "echo 'hello' > world1.txt" },
+      { type: "local-exec", command: "echo 'hello' > world2.txt" },
+    ],
+  }).moveTo("test");
+
+  const synthedStack = JSON.parse(Testing.synth(stack));
+  expect(synthedStack.moved[0].from).toEqual("test_resource.simple");
+  expect(synthedStack.moved[0].to).toEqual(
+    "test_resource.construct_nested-construct_simple_2C3755B0"
+  );
+  expect(Object.keys(synthedStack.resource.test_resource)).toContain(
+    "construct_nested-construct_simple_2C3755B0"
+  );
+  // Must not include old resource being moved from
+  expect(Object.keys(synthedStack.resource.test_resource)).not.toContain(
+    "simple"
+  );
+});
+
+it("moves resource to a lesser nesting from contained construct", () => {
+  const app = Testing.app();
+  const stack = new TerraformStack(app, "test");
+  new TestProvider(stack, "provider", {});
+
+  new TestResource(stack, "simple", {
+    name: "foo",
+    provisioners: [
+      { type: "local-exec", command: "echo 'hello' > world.txt" },
+      { type: "local-exec", command: "echo 'hello' > world1.txt" },
+      { type: "local-exec", command: "echo 'hello' > world2.txt" },
+    ],
+  }).addMoveTarget("test");
+  const construct = new Construct(stack, "construct");
+  const nestedContruct = new Construct(construct, "nested-construct");
+
+  new TestResource(nestedContruct, "simple", {
+    name: "foo",
+    provisioners: [
+      { type: "local-exec", command: "echo 'hello' > world.txt" },
+      { type: "local-exec", command: "echo 'hello' > world1.txt" },
+      { type: "local-exec", command: "echo 'hello' > world2.txt" },
+    ],
+  }).moveTo("test");
+
+  const synthedStack = JSON.parse(Testing.synth(stack));
+  expect(synthedStack.moved[0].from).toEqual(
+    "test_resource.construct_nested-construct_simple_2C3755B0"
+  );
+  expect(synthedStack.moved[0].to).toEqual("test_resource.simple");
+  expect(Object.keys(synthedStack.resource.test_resource)).toContain("simple");
+  // Must not include old resource being moved from
+  expect(Object.keys(synthedStack.resource.test_resource)).not.toContain(
+    "construct_nested-construct_simple_2C3755B0"
+  );
+});
+
+it("moves resource to be in composition with foreach using list iterator", () => {
+  const app = Testing.app();
+  const stack = new TerraformStack(app, "test");
+  new TestProvider(stack, "provider", {});
+
+  const iterator = TerraformIterator.fromList(["foo-one", "foo-two"]);
+
+  new TestResource(stack, "simple-foreach", {
+    forEach: iterator,
+    name: iterator.value,
+    provisioners: [
+      { type: "local-exec", command: "echo 'hello' > world.txt" },
+      { type: "local-exec", command: "echo 'hello' > world1.txt" },
+      { type: "local-exec", command: "echo 'hello' > world2.txt" },
+    ],
+  }).addMoveTarget("test");
+
+  new TestResource(stack, "simple", {
+    name: "foo-one",
+    provisioners: [
+      { type: "local-exec", command: "echo 'hello' > world.txt" },
+      { type: "local-exec", command: "echo 'hello' > world1.txt" },
+      { type: "local-exec", command: "echo 'hello' > world2.txt" },
+    ],
+  }).moveTo("test", "foo-one");
+
+  const synthedStack = JSON.parse(Testing.synth(stack));
+  expect(synthedStack.moved[0].from).toEqual("test_resource.simple");
+  expect(synthedStack.moved[0].to).toEqual(
+    `test_resource.simple-foreach[\"foo-one\"]`
+  );
+  expect(Object.keys(synthedStack.resource.test_resource)).toContain(
+    "simple-foreach"
+  );
+  // Must not include old resource being moved from
+  expect(Object.keys(synthedStack.resource.test_resource)).not.toContain(
+    "simple"
+  );
+});
+
+it("moves resource to be in composition with foreach using complex iterator", () => {
+  const app = Testing.app();
+  const stack = new TerraformStack(app, "test");
+  new TestProvider(stack, "provider", {});
+
+  const complexIterator = TerraformIterator.fromMap({
+    "simple-foreach-one": {
+      name: "foo-one",
+      tags: {
+        tag1: "tag1",
+      },
+    },
+    "simple-foreach-two": {
+      name: "foo-two",
+      tags: {
+        tag2: "tag2",
+      },
+    },
+  });
+
+  new TestResource(stack, "simple-foreach", {
+    forEach: complexIterator,
+    name: complexIterator.getString("name"),
+    tags: complexIterator.getMap("tags"),
+  }).addMoveTarget("test");
+
+  new TestResource(stack, "simple", {
+    name: "foo-one",
+    tags: {
+      tag1: "tag1",
+    },
+  }).moveTo("test", "simple-foreach-one");
+
+  const synthedStack = JSON.parse(Testing.synth(stack));
+  expect(synthedStack.moved[0].from).toEqual("test_resource.simple");
+  expect(synthedStack.moved[0].to).toEqual(
+    `test_resource.simple-foreach[\"simple-foreach-one\"]`
+  );
+  expect(Object.keys(synthedStack.resource.test_resource)).toContain(
+    "simple-foreach"
+  );
+  // Must not include old resource being moved from
+  expect(Object.keys(synthedStack.resource.test_resource)).not.toContain(
+    "simple"
+  );
+});
+
+it("moves multiple resources", () => {
+  const app = Testing.app();
+  const stack = new TerraformStack(app, "test");
+  new TestProvider(stack, "provider", {});
+
+  const construct = new Construct(stack, "construct");
+  const nestedContruct = new Construct(construct, "nested-construct");
+
+  new TestResource(nestedContruct, "simple", {
+    name: "foo",
+    provisioners: [
+      { type: "local-exec", command: "echo 'hello' > world.txt" },
+      { type: "local-exec", command: "echo 'hello' > world1.txt" },
+      { type: "local-exec", command: "echo 'hello' > world2.txt" },
+    ],
+  }).addMoveTarget("test-1");
+
+  new TestResource(nestedContruct, "simple-2", {
+    name: "foo",
+    provisioners: [
+      { type: "local-exec", command: "echo 'hello' > world.txt" },
+      { type: "local-exec", command: "echo 'hello' > world1.txt" },
+      { type: "local-exec", command: "echo 'hello' > world2.txt" },
+    ],
+  }).addMoveTarget("test-2");
+
+  new TestResource(stack, "simple", {
+    name: "foo",
+    provisioners: [
+      { type: "local-exec", command: "echo 'hello' > world.txt" },
+      { type: "local-exec", command: "echo 'hello' > world1.txt" },
+      { type: "local-exec", command: "echo 'hello' > world2.txt" },
+    ],
+  }).moveTo("test-1");
+
+  new TestResource(stack, "simple-2", {
+    name: "foo",
+    provisioners: [
+      { type: "local-exec", command: "echo 'hello' > world.txt" },
+      { type: "local-exec", command: "echo 'hello' > world1.txt" },
+      { type: "local-exec", command: "echo 'hello' > world2.txt" },
+    ],
+  }).moveTo("test-2");
+  //console.log(Testing.synth(stack))
+  const synthedStack = JSON.parse(Testing.synth(stack));
+  expect(synthedStack.moved[0].from).toEqual("test_resource.simple");
+  expect(synthedStack.moved[0].to).toEqual(
+    "test_resource.construct_nested-construct_simple_2C3755B0"
+  );
+  expect(synthedStack.moved[1].from).toEqual("test_resource.simple-2");
+  expect(synthedStack.moved[1].to).toEqual(
+    "test_resource.construct_nested-construct_simple-2_078CE0AF"
+  );
+  expect(Object.keys(synthedStack.resource.test_resource)).toContain(
+    "construct_nested-construct_simple-2_078CE0AF"
+  );
+  expect(Object.keys(synthedStack.resource.test_resource)).toContain(
+    "construct_nested-construct_simple_2C3755B0"
+  );
+  // Must not include old resources being moved from
+  expect(Object.keys(synthedStack.resource.test_resource)).not.toContain(
+    "simple"
+  );
+  expect(Object.keys(synthedStack.resource.test_resource)).not.toContain(
+    "simple-2"
+  );
+});
+
+it("moves correctly when target set after call to moveTo", () => {
+  const app = Testing.app();
+  const stack = new TerraformStack(app, "test");
+  new TestProvider(stack, "provider", {});
+
+  const construct = new Construct(stack, "construct");
+  const nestedContruct = new Construct(construct, "nested-construct");
+
+  new TestResource(stack, "simple", {
+    name: "foo",
+    provisioners: [
+      { type: "local-exec", command: "echo 'hello' > world.txt" },
+      { type: "local-exec", command: "echo 'hello' > world1.txt" },
+      { type: "local-exec", command: "echo 'hello' > world2.txt" },
+    ],
+  }).moveTo("test");
+
+  const resource = new TestResource(nestedContruct, "simple", {
+    name: "foo",
+    provisioners: [
+      { type: "local-exec", command: "echo 'hello' > world.txt" },
+      { type: "local-exec", command: "echo 'hello' > world1.txt" },
+      { type: "local-exec", command: "echo 'hello' > world2.txt" },
+    ],
+  });
+  resource.addMoveTarget("test");
+
+  const synthedStack = JSON.parse(Testing.synth(stack));
+  expect(synthedStack.moved[0].from).toEqual("test_resource.simple");
+  expect(synthedStack.moved[0].to).toEqual(
+    "test_resource.construct_nested-construct_simple_2C3755B0"
+  );
+  expect(Object.keys(synthedStack.resource.test_resource)).toContain(
+    "construct_nested-construct_simple_2C3755B0"
+  );
+  // Must not include old resource being moved from
+  expect(Object.keys(synthedStack.resource.test_resource)).not.toContain(
+    "simple"
+  );
+});
+
+it("override logical ID - before move to id", () => {
+  const app = Testing.app();
+  const stack = new TerraformStack(app, "test");
+  new TestProvider(stack, "provider", {});
+
+  const resource = new TestResource(stack, "simple", {
+    name: "foo",
+    provisioners: [
+      { type: "local-exec", command: "echo 'hello' > world.txt" },
+      { type: "local-exec", command: "echo 'hello' > world1.txt" },
+      { type: "local-exec", command: "echo 'hello' > world2.txt" },
+    ],
+  });
+  resource.overrideLogicalId("old_logical_id");
+  resource.moveToId("test_resource.construct_nested-construct_simple_2C3755B0");
+
+  const construct = new Construct(stack, "construct");
+  const nestedContruct = new Construct(construct, "nested-construct");
+
+  new TestResource(nestedContruct, "simple", {
+    name: "foo",
+    provisioners: [
+      { type: "local-exec", command: "echo 'hello' > world.txt" },
+      { type: "local-exec", command: "echo 'hello' > world1.txt" },
+      { type: "local-exec", command: "echo 'hello' > world2.txt" },
+    ],
+  });
+
+  const synthedStack = JSON.parse(Testing.synth(stack));
+  expect(synthedStack.moved[0].from).toEqual("test_resource.old_logical_id");
+  expect(synthedStack.moved[0].to).toEqual(
+    "test_resource.construct_nested-construct_simple_2C3755B0"
+  );
+  expect(Object.keys(synthedStack.resource.test_resource)).toContain(
+    "construct_nested-construct_simple_2C3755B0"
+  );
+  // Must not include old resource being moved from
+  expect(Object.keys(synthedStack.resource.test_resource)).not.toContain(
+    "old_logical_id"
+  );
+});
+
+it("override logical ID - before move from id", () => {
+  const app = Testing.app();
+  const stack = new TerraformStack(app, "test");
+  new TestProvider(stack, "provider", {});
+
+  const construct = new Construct(stack, "construct");
+  const nestedContruct = new Construct(construct, "nested-construct");
+
+  const resource = new TestResource(nestedContruct, "simple", {
+    name: "foo",
+    provisioners: [
+      { type: "local-exec", command: "echo 'hello' > world.txt" },
+      { type: "local-exec", command: "echo 'hello' > world1.txt" },
+      { type: "local-exec", command: "echo 'hello' > world2.txt" },
+    ],
+  });
+
+  resource.overrideLogicalId("old_logical_id");
+  resource.moveFromId("test_resource.simple");
+
+  const synthedStack = JSON.parse(Testing.synth(stack));
+  expect(synthedStack.moved[0].from).toEqual("test_resource.simple");
+  expect(synthedStack.moved[0].to).toEqual("test_resource.old_logical_id");
+  expect(Object.keys(synthedStack.resource.test_resource)).toContain(
+    "old_logical_id"
+  );
+  // Must not include old resource being moved from
+  expect(Object.keys(synthedStack.resource.test_resource)).not.toContain(
+    "simple"
+  );
 });

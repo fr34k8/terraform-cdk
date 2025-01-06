@@ -1,6 +1,6 @@
 // Copyright (c) HashiCorp, Inc
 // SPDX-License-Identifier: MPL-2.0
-import { TestDriver } from "../../test-helper";
+import { TestDriver, sanitizeTimestamps } from "../../test-helper";
 
 describe("provider add command", () => {
   let driver: TestDriver;
@@ -21,33 +21,28 @@ describe("provider add command", () => {
       expect(res.stdout).toContain("cdktf: 0.10.4");
     });
 
-    test("installs pre-built provider using maven", async () => {
+    test("installs pre-built provider using gradle", async () => {
       const res = await driver.exec("cdktf", [
         "provider",
         "add",
         "random@=3.1.3", // this is not the latest version, but theres v0.2.55 of the pre-built provider resulting in exactly this package
       ]);
-      expect(res.stdout).toMatchInlineSnapshot(`
-        "Checking whether pre-built provider exists for the following constraints:
+      expect(sanitizeTimestamps(res.stdout)).toMatchInlineSnapshot(`
+        "[<TIMESTAMP>] [INFO] default - Checking whether pre-built provider exists for the following constraints:
           provider: random
           version : =3.1.3
           language: java
           cdktf   : 0.10.4
 
 
-        Found pre-built provider.
-
-        Adding com.hashicorp.cdktf-provider-random @ 0.2.55 to pom.xml
-
-        Package installed.
+        [<TIMESTAMP>] [INFO] default - Found pre-built provider.
         "
       `);
       expect(res.stderr).toBe("");
 
-      const proj = driver.readLocalFile("pom.xml");
+      const proj = driver.readLocalFile("build.gradle");
 
-      expect(proj).toContain("<artifactId>cdktf-provider-random</artifactId>");
-      expect(proj).toContain("<version>0.2.55</version>");
-    }, 180_000);
+      expect(proj).toContain("cdktf-provider-random:0.2.55");
+    }, 500_000);
   });
 });

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MPL-2.0
 import * as fs from "fs-extra";
 import * as chalk from "chalk";
-import * as inquirer from "inquirer";
+import { input, confirm, select, checkbox } from "@inquirer/prompts";
 import extract from "extract-zip";
 import { TerraformLogin } from "../helper/terraform-login";
 
@@ -11,32 +11,38 @@ import * as path from "path";
 
 import * as terraformCloudClient from "../helper/terraform-cloud-client";
 
-import { downloadFile, HttpError } from "../../../lib/util";
-import { logFileName, logger } from "../../../lib/logging";
-import { Errors } from "../../../lib/errors";
+import {
+  init,
+  Project,
+  CdktfConfig,
+  getAllPrebuiltProviders,
+} from "@cdktf/cli-core";
 import {
   convertProject,
   getTerraformConfigFromDir,
   parseProviderRequirements,
 } from "@cdktf/hcl2cdk";
 import { isLocalModule } from "@cdktf/provider-generator";
-import { execSync } from "child_process";
-import { sendTelemetry } from "../../../lib/checkpoint";
+import { ExecSyncOptions, execSync } from "child_process";
 import { v4 as uuid } from "uuid";
+import { readSchema } from "@cdktf/provider-schema";
 import {
-  readSchema,
-  ConstructsMakerProviderTarget,
   LANGUAGES,
-  config,
-} from "@cdktf/provider-generator";
-import { templates, templatesDir } from "./init-templates";
-import { init, Project } from "../../../lib";
-import { askForCrashReportingConsent } from "../../../lib/error-reporting";
+  TerraformProviderConstraint,
+  downloadFile,
+  HttpError,
+  logFileName,
+  logger,
+  Errors,
+  sendTelemetry,
+  ConstructsMakerProviderTarget,
+} from "@cdktf/commons";
+import { templates, templatesDir } from "@cdktf/cli-core";
 import ciDetect from "@npmcli/ci-detect";
 import { isInteractiveTerminal } from "./check-environment";
 import { getTerraformVersion } from "./terraform-check";
 import * as semver from "semver";
-import { CdktfConfig } from "../../../lib/cdktf-config";
+import { askForCrashReportingConsent } from "./error-reporting";
 
 const chalkColour = new chalk.Instance();
 
@@ -55,7 +61,11 @@ export function checkForEmptyDirectory(dir: string) {
     process.exit(1);
   }
 }
-const tfeHostname = "app.terraform.io";
+const tfcHostname = "app.terraform.io";
+type GatheredInfo = {
+  projectInfo: Project;
+  useTerraformCloud: boolean | undefined;
+};
 type Options = {
   local?: boolean;
   template?: string;
@@ -63,24 +73,33 @@ type Options = {
   projectDescription?: string;
   cdktfVersion?: string;
   dist?: string;
+  providers?: string[];
+  providersForceLocal?: boolean;
   destination: string;
   fromTerraformProject?: string;
   enableCrashReporting?: boolean;
+  tfeHostname?: string;
+  silent?: boolean;
+  nonInteractive?: boolean;
 };
+
 export async function runInit(argv: Options) {
   const telemetryData: Record<string, unknown> = {};
   const destination = argv.destination || ".";
+  const terraformRemoteHostname = argv.tfeHostname || tfcHostname;
   let token = "";
   if (!argv.local) {
     // We ask the user to login to Terraform Cloud and set a token
     // If the user chooses not to use Terraform Cloud, we continue
     // without a token and set up the project.
 
-    const terraformLogin = new TerraformLogin(tfeHostname);
-    token = await terraformLogin.askToLogin();
+    const terraformLogin = new TerraformLogin(terraformRemoteHostname);
+    token = await terraformLogin.askToLogin(argv.nonInteractive ?? false);
   } else {
-    console.log(chalkColour`{yellow Note: By supplying '--local' option you have chosen local storage mode for storing the state of your stack.
+    if (!argv.silent) {
+      console.log(chalkColour`{yellow Note: By supplying '--local' option you have chosen local storage mode for storing the state of your stack.
 This means that your Terraform state file will be stored locally on disk in a file 'terraform.<STACK NAME>.tfstate' in the root of your project.}`);
+    }
   }
   const isRemote = token != "";
 
@@ -98,51 +117,56 @@ This means that your Terraform state file will be stored locally on disk in a fi
   }
 
   // Gather information about the template and the project
-  const templateInfo = await getTemplate(template);
+  const templateInfo = await getTemplate(
+    template,
+    argv.nonInteractive ?? false
+  );
   telemetryData.template = templateInfo.Name;
 
-  const projectInfo: Project = await gatherInfo(
+  if (!argv.projectName && argv.nonInteractive) {
+    throw Errors.Usage(
+      "You are trying to initialize a project without specifying a project name in non-interactive mode. This can also happen when running cdktf convert against a project not using Typescript, since we need to create a temporary cdktf project for an accurate translation. If this happens using convert, please report it as a bug. Please specify a project name using the --project-name option."
+    );
+  }
+  if (!argv.projectDescription && argv.nonInteractive) {
+    ("You are trying to initialize a project without specifying a project description in non-interactive mode. This can also happen when running cdktf convert against a project not using Typescript, since we need to create a temporary cdktf project for an accurate translation. If this happens using convert, please report it as a bug. Please specify a project name using the --project-description option.");
+  }
+
+  const { projectInfo, useTerraformCloud } = await gatherInfo(
     token,
+    terraformRemoteHostname,
     argv.projectName,
     argv.projectDescription
   );
   const projectId = uuid();
   telemetryData.projectId = projectId;
 
-  const fromTerraformProject =
-    argv.fromTerraformProject ||
-    (templateInfo.Name === "typescript"
-      ? await getTerraformProject()
-      : undefined);
+  let fromTerraformProject = argv.fromTerraformProject || undefined;
+  if (!fromTerraformProject) {
+    if (templateInfo.Name === "typescript") {
+      fromTerraformProject = await getTerraformProject(
+        argv.nonInteractive ?? false
+      );
+    }
+  } else if (fromTerraformProject === "no") {
+    fromTerraformProject = undefined;
+  }
 
-  if (!argv.local) {
+  if (!argv.local && useTerraformCloud) {
     if (!("OrganizationName" in projectInfo)) {
       throw new Error(`Missing organization name in project info`);
     }
 
     if (!("WorkspaceName" in projectInfo)) {
-      throw new Error(`Missing organization name in project info`);
+      throw new Error(`Missing workspace name in project info`);
     }
 
     // Set up a Terraform Cloud workspace if the user opted-in
     if (isRemote) {
       telemetryData.isRemote = Boolean(token);
       console.log(
-        chalkColour`\n{whiteBright Setting up remote state backend and workspace in Terraform Cloud.}`
+        chalkColour`\n{whiteBright Setting up a Cloud Backend for your project.}`
       );
-      try {
-        await terraformCloudClient.createWorkspace(
-          tfeHostname,
-          projectInfo.OrganizationName,
-          projectInfo.WorkspaceName,
-          token
-        );
-      } catch (error) {
-        console.error(
-          chalkColour`{redBright ERROR: Could not create Terraform Cloud Workspace: ${error.message}}`
-        );
-        process.exit(1);
-      }
     }
   }
 
@@ -150,6 +174,10 @@ This means that your Terraform state file will be stored locally on disk in a fi
   const sendCrashReports =
     argv.enableCrashReporting ??
     (ci ? false : await askForCrashReportingConsent());
+  const providers =
+    argv.providers?.length || argv.nonInteractive
+      ? argv.providers
+      : await askForProviders();
 
   let convertResult, importPath;
   if (fromTerraformProject) {
@@ -163,7 +191,6 @@ This means that your Terraform state file will be stored locally on disk in a fi
 
     const combinedTfFile = getTerraformConfigFromDir(importPath);
 
-    // Fetch all provider requirements from the project
     const providerRequirements = await parseProviderRequirements(
       combinedTfFile
     );
@@ -172,7 +199,7 @@ This means that your Terraform state file will be stored locally on disk in a fi
     const { providerSchema } = await readSchema(
       Object.entries(providerRequirements).map(([name, version]) =>
         ConstructsMakerProviderTarget.from(
-          new config.TerraformProviderConstraint(`${name}@ ${version}`),
+          new TerraformProviderConstraint(`${name}@${version}`),
           LANGUAGES[0]
         )
       )
@@ -183,12 +210,14 @@ This means that your Terraform state file will be stored locally on disk in a fi
         language: "typescript",
         providerSchema: providerSchema ?? {},
       });
-    } catch (err) {
-      throw Errors.Internal(err, { fromTerraformProject: true });
+    } catch (err: any) {
+      throw Errors.Internal((err as Error).toString(), err, {
+        fromTerraformProject: true,
+      });
     }
   }
 
-  await init({
+  const needsGet = await init({
     cdktfVersion: argv.cdktfVersion,
     destination,
     dist: argv.dist,
@@ -196,6 +225,9 @@ This means that your Terraform state file will be stored locally on disk in a fi
     projectInfo,
     templatePath: templateInfo.Path,
     sendCrashReports: sendCrashReports,
+    providers,
+    providersForceLocal: argv.providersForceLocal,
+    silent: argv.silent,
   });
 
   if (convertResult && importPath) {
@@ -227,6 +259,12 @@ This means that your Terraform state file will be stored locally on disk in a fi
     }
 
     if (terraformModules.length + terraformProviders.length > 0) {
+      const npmRunGetOptions: ExecSyncOptions = {
+        cwd: destination,
+      };
+      if (argv.silent) {
+        npmRunGetOptions.stdio = "ignore";
+      }
       execSync("npm run get", { cwd: destination });
     }
 
@@ -239,10 +277,40 @@ This means that your Terraform state file will be stored locally on disk in a fi
 
   const cdktfConfig = CdktfConfig.read(destination);
 
+  if (providers?.length) {
+    telemetryData.addedProviders = providers;
+  }
+
   await sendTelemetry("init", {
     ...telemetryData,
     language: cdktfConfig.language,
   });
+
+  return {
+    needsGet,
+    codeMakerOutput: cdktfConfig.codeMakerOutput,
+    language: cdktfConfig.language,
+  };
+}
+
+async function askForProviders(): Promise<string[] | undefined> {
+  if (!isInteractiveTerminal()) {
+    return Promise.resolve(undefined);
+  }
+  const prebuiltProviders = await getAllPrebuiltProviders();
+  const options = Object.keys(prebuiltProviders);
+  console.log(
+    chalkColour`{yellow Note: You can always add providers using 'cdktf provider add' later on}`
+  );
+
+  const selection = await checkbox({
+    message: "What providers do you want to use?",
+    choices: options.map((value) => ({ name: value, value })),
+  });
+
+  return Object.entries(prebuiltProviders)
+    .filter((provider) => selection.includes(provider[0]))
+    .map((provider) => provider[1].split("@")[0]);
 }
 
 function copyLocalModules(
@@ -261,91 +329,123 @@ function copyLocalModules(
 
 async function gatherInfo(
   token: string,
+  terraformRemoteHostname: string,
   projectName?: string,
   projectDescription?: string
-): Promise<Project> {
+): Promise<GatheredInfo> {
   const currentDirectory = path.basename(process.cwd());
   const projectDescriptionDefault =
     "A simple getting started project for cdktf.";
-  const questions = [];
-  if (!projectName) {
-    questions.push({
-      name: "projectName",
+
+  const projectNameInfo =
+    projectName ||
+    (await input({
       message: "Project Name",
       default: currentDirectory,
-    });
-  }
-  if (!projectDescription) {
-    questions.push({
-      name: "projectDescription",
+    }));
+
+  const projectDescriptionInfo =
+    projectDescription ||
+    (await input({
       message: "Project Description",
       default: projectDescriptionDefault,
-    });
+    }));
+
+  const useTerraformEnterprise =
+    token != "" && terraformRemoteHostname != tfcHostname;
+
+  let useTerraformCloud = false;
+  if (token != "") {
+    // We only ask this question if a --tfe-hostname is not provided explicitly
+    // Otherwise, we take it as a signal that the user wants to use Terraform Enterprise.
+    if (terraformRemoteHostname === tfcHostname) {
+      useTerraformCloud = await confirm({
+        message: "Would you like to use Terraform Cloud?",
+        default: true,
+      });
+    }
   }
 
-  const answers: {
-    projectName?: string;
-    projectDescription?: string;
-  } = questions.length > 0 ? await inquirer.prompt(questions) : {};
+  // Either the user answers yes to using Terraform Cloud,
+  // or we've skipped asking the question, but we've inferred that the user wants to use Terraform Enterprise.
+  const isRemote = useTerraformCloud || useTerraformEnterprise;
 
   const project: Project = {
-    Name: projectName || answers.projectName || "",
-    Description: projectDescription || answers.projectDescription || "",
+    Name: projectNameInfo,
+    Description: projectDescriptionInfo,
     OrganizationName: "",
     WorkspaceName: "",
+    TerraformRemoteHostname: isRemote ? terraformRemoteHostname : "",
   };
 
-  if (token != "") {
+  if (isRemote) {
     console.log(chalkColour`\nDetected {blueBright Terraform Cloud} token.`);
     console.log(
       chalkColour`\nWe will now set up {blueBright Terraform Cloud} for your project.\n`
     );
-    const organizationNames = await terraformCloudClient.getOrganizationNames(
-      tfeHostname,
+    const organizationIds = await terraformCloudClient.getOrganizationIds(
+      terraformRemoteHostname,
       token
     );
-    const organizationData = organizationNames.data;
-    const organizationOptions = [];
-    for (const organization of organizationData) {
-      organizationOptions.push(organization.id);
+
+    if (organizationIds.length == 0) {
+      throw Errors.Usage(
+        `You must be part of an organization in Terraform Cloud in order to use it as a RemoteBackend or CloudBackend.
+You can create one here: https://${terraformRemoteHostname}/app/organizations/new`
+      );
     }
 
     // todo: add validation for the organization name and workspace. add error handling
-    const { organization: organizationSelect } = await inquirer.prompt([
-      {
-        type: "list",
-        name: "organization",
-        message: "Terraform Cloud Organization Name",
-        choices: organizationOptions,
-      },
-    ]);
+    const organizationSelect = await select({
+      message: "Terraform Cloud Organization Name",
+      choices: organizationIds.map((value) => ({ name: value, value })),
+    });
 
     console.log(
       chalkColour`\nWe are going to create a new {blueBright Terraform Cloud Workspace} for your project.\n`
     );
 
-    const { workspace: workspaceName } = await inquirer.prompt([
-      {
-        name: "workspace",
-        message: "Terraform Cloud Workspace Name",
+    let workspaceName;
+    while (!workspaceName) {
+      const tryWorkspaceName = await input({
+        message: `Terraform Cloud Workspace Name`,
         default: project.Name,
-      },
-    ]);
+      });
+
+      const isWorkspaceNameTaken =
+        await terraformCloudClient.isExistingWorkspaceWithName(
+          terraformRemoteHostname,
+          organizationSelect,
+          tryWorkspaceName,
+          token
+        );
+      if (!isWorkspaceNameTaken) {
+        workspaceName = tryWorkspaceName;
+        break;
+      }
+      console.log(
+        chalkColour`{redBright Error:} A workspace with the name {blueBright ${tryWorkspaceName}} already exists in the organization {blueBright ${organizationSelect}}. Please choose a different name.`
+      );
+    }
+
     project.OrganizationName = organizationSelect;
     project.WorkspaceName = workspaceName;
   }
 
-  return project;
+  return {
+    projectInfo: project,
+    useTerraformCloud: isRemote,
+  };
 }
 
-async function getTerraformProject(): Promise<string | undefined> {
-  if (!isInteractiveTerminal()) {
+async function getTerraformProject(
+  nonInteractive: boolean
+): Promise<string | undefined> {
+  if (!isInteractiveTerminal() || nonInteractive) {
     return Promise.resolve(undefined);
   }
-  const { shouldUseTerraformProject } = await inquirer.prompt({
-    name: "shouldUseTerraformProject",
+  const shouldUseTerraformProject = await confirm({
     message: "Do you want to start from an existing Terraform project?",
-    type: "confirm",
     default: false,
   });
 
@@ -353,14 +453,10 @@ async function getTerraformProject(): Promise<string | undefined> {
     return undefined;
   }
 
-  let { terraformProject } = await inquirer.prompt([
-    {
-      name: "terraformProject",
-      message: "Please enter the path to the Terraform project",
-      type: "input",
-      default: "",
-    },
-  ]);
+  let terraformProject = await input({
+    message: "Please enter the path to the Terraform project",
+    default: "",
+  });
 
   if (!terraformProject || terraformProject === "") {
     return undefined;
@@ -383,35 +479,36 @@ async function getTerraformProject(): Promise<string | undefined> {
  *
  * @param templateName either the name of built-in templates or an url pointing to a zip archive
  */
-async function getTemplate(templateName: string): Promise<Template> {
+async function getTemplate(
+  templateName: string,
+  nonInteractive: boolean
+): Promise<Template> {
   if (templateName == "") {
+    if (nonInteractive) {
+      throw Errors.Usage(
+        "You are trying to initialize a project without specifying a template in non-interactive mode. This can also happen when running cdktf convert against a project not using Typescript, since we need to create a temporary cdktf project for an accurate translation. Please specify a template using the --template option in init or --language in convert."
+      );
+    }
     const templateOptionRemote = "<remote zip file>";
     const options = [...templates, templateOptionRemote];
     // Prompt for template
-    const { template: selection } = await inquirer.prompt([
-      {
-        type: "list",
-        name: "template",
-        message: "What template do you want to use?",
-        choices: options,
-      },
-    ]);
+    const selection = await select({
+      message: "What template do you want to use?",
+      choices: options.map((value) => ({ name: value, value })),
+    });
 
     if (selection === templateOptionRemote) {
-      const { templateName: remoteTemplateName } = await inquirer.prompt([
-        {
-          name: "templateName",
-          message:
-            "Please enter an URL pointing to the template zip file you want to use:",
-          validate: (value: string) => {
-            if (value === "") {
-              return "Url can not be empty";
-            } else {
-              return true;
-            }
-          },
+      const remoteTemplateName = await input({
+        message:
+          "Please enter an URL pointing to the template zip file you want to use:",
+        validate: (value: string) => {
+          if (value === "") {
+            return "Url can not be empty";
+          } else {
+            return true;
+          }
         },
-      ]);
+      });
 
       templateName = remoteTemplateName;
     } else {
@@ -469,6 +566,7 @@ async function fetchRemoteTemplate(templateUrl: string): Promise<Template> {
     if (!templatePath) {
       throw Errors.Usage(
         chalkColour`Could not find a {whiteBright cdktf.json} in the extracted directory`,
+        new Error(),
         {}
       );
     }
@@ -482,7 +580,7 @@ async function fetchRemoteTemplate(templateUrl: string): Promise<Template> {
       },
     };
   } catch (e) {
-    if (e.code === "ERR_INVALID_URL") {
+    if ((e as NodeJS.ErrnoException).code === "ERR_INVALID_URL") {
       console.error(
         chalkColour`Could not download template: {redBright the supplied url is invalid}`
       );

@@ -3,7 +3,6 @@
 [![PyPI version](https://badge.fury.io/py/cdktf.svg)](https://badge.fury.io/py/cdktf)
 [![NuGet version](https://badge.fury.io/nu/HashiCorp.Cdktf.svg)](https://badge.fury.io/nu/HashiCorp.Cdktf)
 [![Maven Central](https://img.shields.io/maven-central/v/com.hashicorp/cdktf?color=brightgreen)](https://search.maven.org/artifact/com.hashicorp/cdktf)
-[![homebrew](https://img.shields.io/homebrew/v/cdktf?color=brightgreen)](https://formulae.brew.sh/formula/cdktf#default)
 
 # CDK for Terraform
 
@@ -24,25 +23,25 @@ CDKTF includes two packages:
 
 Choose a language:
 
-- [TypeScript](https://learn.hashicorp.com/tutorials/terraform/cdktf-build?in=terraform/cdktf)
-- [Python](https://learn.hashicorp.com/tutorials/terraform/cdktf-build?in=terraform/cdktf)
-- [Java](https://learn.hashicorp.com/tutorials/terraform/cdktf-build?in=terraform/cdktf)
-- [C#](https://learn.hashicorp.com/tutorials/terraform/cdktf-build?in=terraform/cdktf)
-- [Go](https://learn.hashicorp.com/tutorials/terraform/cdktf-build?in=terraform/cdktf)
+- [TypeScript](https://developer.hashicorp.com/terraform/tutorials/cdktf/cdktf-build?in=terraform%2Fcdktf&variants=cdk-language%3Atypescript)
+- [Python](https://developer.hashicorp.com/terraform/tutorials/cdktf/cdktf-build?in=terraform%2Fcdktf&variants=cdk-language%3Apython)
+- [Java](https://developer.hashicorp.com/terraform/tutorials/cdktf/cdktf-build?in=terraform%2Fcdktf&variants=cdk-language%3Ajava)
+- [C#](https://developer.hashicorp.com/terraform/tutorials/cdktf/cdktf-build?in=terraform%2Fcdktf&variants=cdk-language%3Acsharp)
+- [Go](https://developer.hashicorp.com/terraform/tutorials/cdktf/cdktf-build?in=terraform%2Fcdktf&variants=cdk-language%3Ago)
 
 > **Hands-on:** Try the tutorials in the [CDK for Terraform](https://learn.hashicorp.com/collections/terraform/cdktf) collection on HashiCorp Learn.
 
 ## Documentation
 
-Refer to the [CDKTF documentation](https://www.terraform.io/docs/cdktf/index.html) for more detail about how to build and manage CDKTF applications, including:
+Refer to the [CDKTF documentation](https://developer.hashicorp.com/terraform/cdktf) for more detail about how to build and manage CDKTF applications, including:
 
-- [Application Architecture](https://www.terraform.io/docs/cdktf/concepts/cdktf-architecture.html): Learn the tools and processes that CDKTF uses to leverage the Terraform ecosystem and convert code into Terraform configuration files. It also explains the major components of a CDKTF application and how those pieces fit together.
+- [Application Architecture](https://developer.hashicorp.com/terraform/cdktf/concepts/cdktf-architecture): Learn the tools and processes that CDKTF uses to leverage the Terraform ecosystem and convert code into Terraform configuration files. It also explains the major components of a CDKTF application and how those pieces fit together.
 
-- [Project Setup](https://www.terraform.io/docs/cdktf/create-and-deploy/project-setup.html): Learn how to create a new CDKTF project from a pre-built or custom template. Also learn how to convert an existing HCL project into a CDKTF application.
+- [Project Setup](https://developer.hashicorp.com/terraform/cdktf/create-and-deploy/project-setup): Learn how to create a new CDKTF project from a pre-built or custom template. Also learn how to convert an existing HCL project into a CDKTF application.
 
-- [Unit Tests](https://www.terraform.io/docs/cdktf/test/unit-tests.html): Learn how to test your application in Typescript with jest.
+- [Unit Tests](https://developer.hashicorp.com/terraform/cdktf/test/unit-tests): Learn how to test your application in Typescript with jest.
 
-- [Examples](https://www.terraform.io/docs/cdktf/examples.html): Reference example projects in every supported language and review explanatory videos and other resources.
+- [Examples](https://developer.hashicorp.com/terraform/cdktf/examples-and-guides/examples): Reference example projects in every supported language and review explanatory videos and other resources.
 
 ## Community
 

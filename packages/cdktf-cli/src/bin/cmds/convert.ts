@@ -1,7 +1,7 @@
 // Copyright (c) HashiCorp, Inc
 // SPDX-License-Identifier: MPL-2.0
 import yargs from "yargs";
-import { Errors } from "../../lib/errors";
+import { Errors } from "@cdktf/commons";
 import { BaseCommand } from "./helper/base-command";
 import { requireHandlers } from "./helper/utilities";
 import * as path from "path";
@@ -33,10 +33,10 @@ class Command extends BaseCommand {
       )
       .example(
         "cat main.tf | cdktf convert --provider 'hashicorp/aws@ ~>3.62.0' 'integrations/github@ ~>4.16.0' --language python > imported.py",
-        "Takes the HCL content of main.tf and converts it to CDK for Terraform content in imported.ts"
+        "Takes the HCL content of main.tf and converts it to CDK for Terraform content in imported.py"
       )
       .option("language", {
-        choices: ["typescript", "python", "csharp", "java"],
+        choices: ["typescript", "python", "csharp", "java", "go"],
         default: readCdktfJson()?.language || "typescript",
       })
       .option("provider", {
@@ -45,12 +45,24 @@ class Command extends BaseCommand {
         type: "array",
         default: [],
       })
+      .option("stack", {
+        describe: "Wrap the generated code within a stack class",
+        type: "boolean",
+        default: false,
+      })
       .showHelpOnFail(true);
 
   public async handleCommand(argv: any) {
     Errors.setScope("convert");
     // deferred require to keep cdktf-cli main entrypoint small (e.g. for fast shell completions)
     const api = requireHandlers();
+    if (argv.withProject !== undefined) {
+      if (argv.language === "typescript") {
+        argv.withProject = false;
+      } else {
+        argv.withProject = true;
+      }
+    }
     await api.convert(argv);
   }
 }

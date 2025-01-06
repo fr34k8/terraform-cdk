@@ -1,16 +1,19 @@
 // Copyright (c) HashiCorp, Inc
 // SPDX-License-Identifier: MPL-2.0
 import { CodeMaker, toCamelCase } from "codemaker";
-import { ProviderSchema } from "./provider-schema";
-import { ResourceModel } from "./models";
-import { ResourceParser } from "./resource-parser";
-import { ResourceEmitter, StructEmitter } from "./emitter";
 import {
   ConstructsMakerProviderTarget,
   ConstructsMakerTarget,
   LANGUAGES,
-} from "../constructs-maker";
-import { logger, TerraformProviderConstraint } from "../../config";
+  logger,
+  ProviderSchema,
+  TerraformProviderConstraint,
+} from "@cdktf/commons";
+import { FQPN, parseFQPN, ProviderName } from "@cdktf/provider-schema";
+import { ResourceModel } from "./models";
+import { ResourceParser } from "./resource-parser";
+import { ResourceEmitter, StructEmitter } from "./emitter";
+
 interface ProviderData {
   name: string;
   source: string;
@@ -28,11 +31,48 @@ const isMatching = (
   if (elements.length === 1) {
     return target.source === terraformSchemaName;
   } else {
-    const [hostname, scope, provider] = elements;
+    const [hostname, namespace, provider] = elements;
 
-    if (!hostname || !scope || !provider) {
+    if (!hostname || !namespace || !provider) {
       throw new Error(`can't handle ${terraformSchemaName}`);
     }
+
+    // If target.source is set, try to match it
+    if (target.source) {
+      const targetSource = {
+        // defaults
+        hostname: "registry.terraform.io",
+        namespace: "hashicorp",
+        name: "",
+      };
+      const targetElements = target.source.split("/");
+      switch (targetElements.length) {
+        case 1: // only name set
+          targetSource.name = targetElements[0].toLowerCase();
+          break;
+        case 2: // namespace and name set
+          targetSource.namespace = targetElements[0].toLowerCase();
+          targetSource.name = targetElements[1].toLowerCase();
+          break;
+        case 3: // hostname, namespace and name set
+          targetSource.hostname = targetElements[0].toLowerCase();
+          targetSource.namespace = targetElements[1].toLowerCase();
+          targetSource.name = targetElements[2].toLowerCase();
+          break;
+        default:
+          throw new Error(
+            `can't handle ${target.source}. Expected string with 1, 2 or 3 elements separated by '/'`
+          );
+      }
+
+      return (
+        targetSource.hostname === hostname &&
+        targetSource.namespace === namespace &&
+        targetSource.name === provider
+      );
+    }
+
+    // Else, try to match target.name to the provider name
 
     return target.name === provider;
   }
@@ -57,10 +97,12 @@ export class TerraformProviderGenerator {
     this.structEmitter = new StructEmitter(this.code);
   }
 
-  private getProviderByConstraint(providerConstraint: ConstructsMakerTarget) {
+  private getProviderByConstraint(
+    providerConstraint: ConstructsMakerTarget
+  ): FQPN | undefined {
     return Object.keys(this.schema.provider_schemas || {}).find((fqpn) =>
       isMatching(providerConstraint, fqpn)
-    );
+    ) as FQPN | undefined;
   }
 
   public generate(providerConstraint: ConstructsMakerTarget) {
@@ -74,7 +116,9 @@ export class TerraformProviderGenerator {
         )}`
       );
       throw new Error(
-        `Could not find provider with constraint ${providerConstraint}`
+        `Could not find provider with constraint ${JSON.stringify(
+          providerConstraint
+        )}`
       );
     }
 
@@ -98,12 +142,10 @@ export class TerraformProviderGenerator {
     await this.code.save(outdir);
   }
 
-  public buildResourceModels(fqpn: string): ResourceModel[] {
-    const name = fqpn.split("/").pop();
-    if (!name) {
-      throw new Error(`can't handle ${fqpn}`);
-    }
-
+  public buildResourceModels(
+    fqpn: FQPN,
+    constraint?: ConstructsMakerTarget
+  ): ResourceModel[] {
     const provider = this.schema.provider_schemas?.[fqpn];
     if (!provider) {
       throw new Error(`Can not find provider '${fqpn}' in schema`);
@@ -111,12 +153,18 @@ export class TerraformProviderGenerator {
 
     const resources = Object.entries(provider.resource_schemas || {}).map(
       ([type, resource]) =>
-        this.resourceParser.parse(name, type, resource, "resource")
+        this.resourceParser.parse(fqpn, type, resource, "resource", constraint)
     );
 
     const dataSources = Object.entries(provider.data_source_schemas || {}).map(
       ([type, resource]) =>
-        this.resourceParser.parse(name, `data_${type}`, resource, "data_source")
+        this.resourceParser.parse(
+          fqpn,
+          `data_${type}`,
+          resource,
+          "data_source",
+          constraint
+        )
     );
 
     return ([] as ResourceModel[]).concat(...resources, ...dataSources);
@@ -126,22 +174,25 @@ export class TerraformProviderGenerator {
     return this.resourceParser.getClassNameForResource(terraformType);
   }
 
+  public getNamespaceNameForResource(terraformType: string) {
+    return this.resourceParser.getNamespaceNameForResource(terraformType);
+  }
+
   private emitProvider(
-    fqpn: string,
+    fqpn: FQPN,
     providerVersion?: string,
     constraint?: ConstructsMakerTarget
   ) {
-    const name = fqpn.split("/").pop();
-    if (!name) {
-      throw new Error(`can't handle ${fqpn}`);
-    }
+    const name = constraint?.name
+      ? (constraint.name as ProviderName)
+      : parseFQPN(fqpn).name;
     const provider = this.schema.provider_schemas?.[fqpn];
     if (!provider) {
       throw new Error(`Can not find provider '${fqpn}' in schema`);
     }
 
     const files: string[] = [];
-    this.buildResourceModels(fqpn).forEach((resourceModel) => {
+    this.buildResourceModels(fqpn, constraint).forEach((resourceModel) => {
       if (constraint) {
         resourceModel.providerVersionConstraint = constraint.version;
         resourceModel.terraformProviderSource = constraint.source;
@@ -158,14 +209,16 @@ export class TerraformProviderGenerator {
 
     if (provider.provider) {
       const providerResource = this.resourceParser.parse(
-        name,
+        fqpn,
         `provider`,
         provider.provider,
-        "provider"
+        "provider",
+        constraint
       );
       if (constraint) {
         providerResource.providerVersionConstraint = constraint.version;
         providerResource.terraformProviderSource = constraint.source;
+        providerResource.terraformProviderName = constraint.name;
       }
       providerResource.providerVersion = providerVersion;
       files.push(this.emitResource(providerResource));
@@ -173,6 +226,7 @@ export class TerraformProviderGenerator {
     }
 
     this.emitIndexFile(name, files);
+    this.emitLazyIndexFile(name, files);
   }
 
   private emitResourceReadme(resource: ResourceModel): void {
@@ -184,12 +238,12 @@ export class TerraformProviderGenerator {
       ? resource.provider
       : resource.terraformType;
     this.code.line(
-      `Refer to the Terraform Registory for docs: [\`${type}\`](${resource.linkToDocs}).`
+      `Refer to the Terraform Registry for docs: [\`${type}\`](${resource.linkToDocs}).`
     );
     this.code.closeFile(filePath);
   }
 
-  private emitIndexFile(provider: string, files: string[]): void {
+  private emitIndexFile(provider: ProviderName, files: string[]): void {
     const folder = `providers/${provider}`;
     const filePath = `${folder}/index.ts`;
     this.code.openFile(filePath);
@@ -198,6 +252,23 @@ export class TerraformProviderGenerator {
       const dirName = file.replace(`${folder}/`, "").replace("/index.ts", "");
       this.code.line(
         `export * as ${toCamelCase(dirName)} from './${dirName}';`
+      );
+    }
+    this.code.line();
+    this.code.closeFile(filePath);
+  }
+
+  private emitLazyIndexFile(provider: ProviderName, files: string[]): void {
+    const folder = `providers/${provider}`;
+    const filePath = `${folder}/lazy-index.ts`;
+    this.code.openFile(filePath);
+    this.code.line("// generated by cdktf get");
+    for (const file of files) {
+      const dirName = file.replace(`${folder}/`, "").replace("/index.ts", "");
+      this.code.line(
+        `Object.defineProperty(exports, '${toCamelCase(
+          dirName
+        )}', { get: function () { return require('./${dirName}'); } });`
       );
     }
     this.code.line();

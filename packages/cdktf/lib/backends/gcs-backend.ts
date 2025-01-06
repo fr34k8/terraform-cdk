@@ -10,11 +10,15 @@ import {
 
 // eslint-disable-next-line jsdoc/require-jsdoc
 export class GcsBackend extends TerraformBackend {
-  constructor(scope: Construct, private readonly props: GcsBackendProps) {
+  constructor(scope: Construct, private readonly props: GcsBackendConfig) {
     super(scope, "backend", "gcs");
   }
 
   protected synthesizeAttributes(): { [name: string]: any } {
+    return keysToSnakeCase({ ...this.props });
+  }
+
+  protected synthesizeHclAttributes(): { [name: string]: any } {
     return keysToSnakeCase({ ...this.props });
   }
 
@@ -50,9 +54,9 @@ export class DataTerraformRemoteStateGcs extends TerraformRemoteState {
  * to allow for state recovery in the case of accidental deletions and human error.
  *
  * Read more about this backend in the Terraform docs:
- * https://www.terraform.io/language/settings/backends/gcs
+ * https://developer.hashicorp.com/terraform/language/settings/backends/gcs
  */
-export interface GcsBackendProps {
+export interface GcsBackendConfig {
   /**
    * (Required) The name of the GCS bucket. This name must be globally unique.
    */
@@ -93,8 +97,21 @@ export interface GcsBackendProps {
    * (Optional) The delegation chain for an impersonating a service account
    */
   readonly impersonateServiceAccountDelegates?: string[];
+  /**
+   * (Optional) A Cloud KMS key ('customer-managed encryption key') used when reading and writing state files in the bucket.
+   * Format should be projects/{{project}}/locations/{{location}}/keyRings/{{keyRing}}/cryptoKeys/{{name}}.
+   * For more information, including IAM requirements, see {@link https://cloud.google.com/storage/docs/encryption/customer-managed-keys Customer-managed Encryption Keys}.
+   */
+  readonly kmsEncryptionKey?: string;
+  /**
+   * (Optional) A URL containing three parts: the protocol,
+   * the DNS name pointing to a Private Service Connect endpoint,
+   * and the path for the Cloud Storage API (/storage/v1/b).
+   * {@link https://developer.hashicorp.com/terraform/language/settings/backends/gcs#storage_custom_endpoint See here for more details}
+   */
+  readonly storeageCustomEndpoint?: string;
 }
 
 export interface DataTerraformRemoteStateGcsConfig
   extends DataTerraformRemoteStateConfig,
-    GcsBackendProps {}
+    GcsBackendConfig {}

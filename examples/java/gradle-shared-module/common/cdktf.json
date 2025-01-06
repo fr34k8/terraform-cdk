@@ -2,12 +2,9 @@
   "language": "java",
   "app": "../gradlew -q :common:run",
   "output": "./",
-  "codeMakerOutput": "./src/main/java/imports",
+  "codeMakerOutput": "imports",
   "terraformProviders": [
     "hashicorp/vsphere@~> 2.0.2"
   ],
-  "context": {
-    "excludeStackIdFromLogicalIds": true,
-    "allowSepCharsInLogicalIds": true
-  }
+  "context": {}
 }

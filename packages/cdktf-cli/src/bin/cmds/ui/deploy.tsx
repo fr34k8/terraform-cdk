@@ -1,13 +1,18 @@
+/**
+ * Copyright (c) HashiCorp, Inc.
+ * SPDX-License-Identifier: MPL-2.0
+ */
+
 /* eslint-disable no-control-regex */
 import React, { useState } from "react";
 import { Text, Box } from "ink";
-import { DeployingResource } from "../../../lib/models/terraform";
-import { NestedTerraformOutputs } from "../../../lib/output";
+import { DeployingResource, NestedTerraformOutputs } from "@cdktf/cli-core";
 import { useCdktfProject } from "./hooks/cdktf-project";
 import {
   StreamView,
   OutputsBottomBar,
   ApproveBottomBar,
+  OverrideBottomBar,
   ExecutionStatusBottomBar,
 } from "./components";
 interface DeploySummaryConfig {
@@ -57,6 +62,11 @@ interface DeployConfig {
   parallelism?: number;
   refreshOnly?: boolean;
   terraformParallelism?: number;
+  vars?: string[];
+  varFiles?: string[];
+  noColor?: boolean;
+  migrateState?: boolean;
+  skipSynth?: boolean;
 }
 
 export const Deploy = ({
@@ -70,6 +80,11 @@ export const Deploy = ({
   parallelism,
   refreshOnly,
   terraformParallelism,
+  vars,
+  varFiles,
+  noColor,
+  migrateState,
+  skipSynth,
 }: DeployConfig): React.ReactElement => {
   const [outputs, setOutputs] = useState<NestedTerraformOutputs>();
   const { status, logEntries } = useCdktfProject(
@@ -82,6 +97,11 @@ export const Deploy = ({
         parallelism,
         refreshOnly,
         terraformParallelism,
+        vars,
+        varFiles,
+        noColor,
+        migrateState,
+        skipSynth,
       });
 
       if (onOutputsRetrieved) {
@@ -100,6 +120,13 @@ export const Deploy = ({
         onApprove={status.approve}
         onDismiss={status.dismiss}
         onStop={status.stop}
+      />
+    ) : status?.type ===
+      "waiting for override of sentinel policy check failure" ? (
+      <OverrideBottomBar
+        stackName={status.stackName}
+        onOverride={status.override}
+        onReject={status.reject}
       />
     ) : (
       <ExecutionStatusBottomBar status={status} actionName="deploying" />

@@ -8,7 +8,7 @@ import * as path from "path";
 import * as os from "os";
 import * as semver from "semver";
 import { promisify } from "util";
-import { DISPLAY_VERSION } from "../../../lib/version";
+import { DISPLAY_VERSION, DISABLE_VERSION_CHECK } from "@cdktf/commons";
 
 const ONE_DAY_IN_SECONDS = 1 * 24 * 60 * 60;
 
@@ -47,7 +47,7 @@ export class VersionCheckTTL {
         return true;
       }
       return false;
-    } catch (err) {
+    } catch (err: any) {
       if (err.code === "ENOENT") {
         return true;
       } else {
@@ -95,7 +95,7 @@ export async function latestVersionIfHigher(
 }
 
 export async function displayVersionMessage(): Promise<void> {
-  if (!process.stdout.isTTY) {
+  if (!process.stdout.isTTY || DISABLE_VERSION_CHECK) {
     return;
   }
 
@@ -110,7 +110,7 @@ export async function displayVersionMessage(): Promise<void> {
         `Newer version of Terraform CDK is available [${laterVersion}] - Upgrade recommended`
       );
     }
-  } catch (err) {
+  } catch (err: any) {
     console.error(`Could not run version check - ${err.message}`);
   }
 }

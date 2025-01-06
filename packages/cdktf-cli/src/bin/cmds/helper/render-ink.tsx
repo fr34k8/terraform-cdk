@@ -1,3 +1,8 @@
+/**
+ * Copyright (c) HashiCorp, Inc.
+ * SPDX-License-Identifier: MPL-2.0
+ */
+
 import { render } from "ink";
 import React, { Fragment } from "react";
 import { exit } from "process";
@@ -12,7 +17,7 @@ export const renderInk = async (component: React.ReactElement) => {
 
   try {
     await waitUntilExit();
-  } catch (e) {
+  } catch (e: any) {
     console.error(e.message);
     exit(1);
   }

@@ -1,0 +1,8 @@
+{
+  "language": "java",
+  "app": "./gradlew run",
+  "codeMakerOutput": "imports",
+  "terraformProviders": [
+    "kubernetes@~> 1.11.3"
+  ]
+}

@@ -1,241 +1,448 @@
 // Copyright (c) HashiCorp, Inc
 // SPDX-License-Identifier: MPL-2.0
 import { Struct } from "./struct";
+import { uppercaseFirst, downcaseFirst } from "../../../util";
 
-export interface AttributeTypeModelOptions {
-  isBlock?: boolean;
-  struct?: Struct;
-  isList?: boolean;
-  isSet?: boolean;
-  isComputed?: boolean;
-  isOptional?: boolean;
-  isRequired?: boolean;
-  isSingleItem?: boolean;
-  isMap?: boolean;
-  level?: number;
-  isNested?: boolean;
+export interface AttributeTypeModel {
+  readonly struct?: Struct; // complex object type contained within the type
+  readonly isComplex: boolean; // basically the same as having a struct
+  getStoredClassInitializer(name: string): string; // initializer for keeping class needed to keep track of reference access
+  readonly storedClassType: string; // used mainly by collection types to generate their stored class initializer
+  readonly inputTypeDefinition: string; // this is the type used for inputting values
+  getAttributeAccessFunction(name: string): string; // this is for getting reference for simple types
+  readonly toTerraformFunction: string; // this is for converting input values to Terraform syntax
+  readonly toHclTerraformFunction: string; // this is for converting input values to Terraform syntax in HCL
+  readonly typeModelType: string; // so we don't need to use instanceof
+  readonly hasReferenceClass: boolean; // used to determine if a stored_class getter should be used
+  readonly isTokenizable: boolean; // can the type be represented by a token type
 }
 
-export enum TokenizableTypes {
-  STRING = "string",
-  STRING_LIST = "string[]",
-  NUMBER = "number",
-  NUMBER_LIST = "number[]",
-  BOOLEAN = "boolean",
+export class SkippedAttributeTypeModel implements AttributeTypeModel {
+  constructor() {}
+
+  get typeModelType() {
+    return "simple";
+  }
+
+  get struct() {
+    return undefined;
+  }
+
+  get isComplex() {
+    return false;
+  }
+
+  getStoredClassInitializer(_name: string) {
+    // not used
+    return "";
+  }
+
+  get storedClassType() {
+    return "any";
+  }
+
+  get inputTypeDefinition() {
+    return "any";
+  }
+
+  getAttributeAccessFunction(name: string) {
+    return `this.interpolationForAttribute('${name}')`;
+  }
+
+  get toTerraformFunction() {
+    return `cdktf.anyToTerraform`;
+  }
+
+  get toHclTerraformFunction() {
+    return `cdktf.anyToHclTerraform`;
+  }
+
+  get hasReferenceClass() {
+    return false;
+  }
+
+  get isTokenizable() {
+    return false;
+  }
 }
 
-export interface ComputedComplexOptions {
-  name: string;
-  type: string;
-}
+export class SimpleAttributeTypeModel implements AttributeTypeModel {
+  constructor(public readonly type: string) {}
 
-export class AttributeTypeModel {
-  public isBlock?: boolean;
-  public isList: boolean;
-  public isSet: boolean;
-  public isComputed: boolean;
-  public isOptional: boolean;
-  public isRequired?: boolean;
-  public isSingleItem?: boolean; // a block with max one item in it
-  public isMap: boolean;
-  public struct?: Struct;
-  public level?: number;
-  public typeName: string;
-  public isNested?: boolean;
+  get typeModelType() {
+    return "simple";
+  }
 
-  constructor(private _type: string, options: AttributeTypeModelOptions) {
-    this.typeName = _type;
-    this.isBlock = !!options.isBlock;
-    this.isList = !!options.isList;
-    this.isSet = !!options.isSet;
-    this.isMap = !!options.isMap;
-    this.isComputed = !!options.isComputed;
-    this.isOptional = !!options.isOptional;
-    this.isRequired = !!options.isRequired;
-    this.isSingleItem = !!options.isSingleItem;
-    this.level = options.level;
-    this.struct = options.struct;
-    this.isNested = !!options.isNested;
-    if (options.struct) {
-      options.struct.isSingleItem = this.isSingleItem || false;
+  get struct() {
+    return undefined;
+  }
+
+  get isComplex() {
+    return false;
+  }
+
+  getStoredClassInitializer(_name: string) {
+    // not used
+    return "";
+  }
+
+  get storedClassType() {
+    return this.type;
+  }
+
+  get inputTypeDefinition() {
+    if (this.type === "boolean") {
+      return "boolean | cdktf.IResolvable";
+    } else {
+      return this.type;
     }
   }
 
-  public get name(): string {
-    // computed map wrappers
-    if (this.isComputedStringMap) return `cdktf.StringMap`;
-    if (this.isComputedNumberMap) return `cdktf.NumberMap`;
-    if (this.isComputedBooleanMap) return `cdktf.BooleanMap`;
-    if (this.isComputedAnyMap) return `cdktf.AnyMap`;
+  getAttributeAccessFunction(name: string) {
+    return `this.get${uppercaseFirst(this.type)}Attribute('${name}')`;
+  }
 
-    // map of booleans has token support, but booleans don't
-    if (this.isBooleanMap)
-      return `{ [key: string]: (${this._type} | cdktf.IResolvable) }`;
+  get toTerraformFunction() {
+    return `cdktf.${this.type}ToTerraform`;
+  }
 
-    // other maps with token support
-    if (this.isTokenizableMap) return `{ [key: string]: ${this._type} }`;
+  get toHclTerraformFunction() {
+    return `cdktf.${this.type}ToHclTerraform`;
+  }
 
-    // maps without token support
-    if (this.isMap)
-      return `{ [key: string]: ${this._type} } | cdktf.IResolvable`;
+  get hasReferenceClass() {
+    return false;
+  }
 
-    const hasListRepresentation = this.isList || this.isSet;
+  get isTokenizable() {
+    return true;
+  }
+}
 
-    // single item list
-    if (hasListRepresentation && !this.isComputed && this.isSingleItem)
-      return `${this._type}`;
+export class StructAttributeTypeModel implements AttributeTypeModel {
+  constructor(public readonly struct: Struct) {}
 
-    // neither boolean nor boolean[] is tokenizable, so both parts need IResolvable
-    if (hasListRepresentation && this._type === TokenizableTypes.BOOLEAN)
+  get typeModelType() {
+    return "struct";
+  }
+
+  get isComplex() {
+    return true;
+  }
+
+  getStoredClassInitializer(name: string) {
+    return `new ${this.struct.outputReferenceName}(this, "${name}")`;
+  }
+
+  get storedClassType() {
+    return this.struct.name;
+  }
+
+  get inputTypeDefinition() {
+    return this.struct.name;
+  }
+
+  getAttributeAccessFunction(name: string) {
+    // This shouln't actually be called
+    return `this.interpolationForAttribute('${name}')`;
+  }
+
+  get toTerraformFunction() {
+    return `${downcaseFirst(this.struct.name)}ToTerraform`;
+  }
+
+  get toHclTerraformFunction() {
+    return `${downcaseFirst(this.struct.name)}ToHclTerraform`;
+  }
+
+  get hasReferenceClass() {
+    return true;
+  }
+
+  get isTokenizable() {
+    return false;
+  }
+}
+
+export interface CollectionAttributeTypeModel extends AttributeTypeModel {
+  elementType: AttributeTypeModel;
+}
+
+export class ListAttributeTypeModel implements CollectionAttributeTypeModel {
+  constructor(
+    public readonly elementType: AttributeTypeModel,
+    public readonly isSingleItem: boolean,
+    private readonly isBlock: boolean
+  ) {
+    if (this.struct) {
+      this.struct.isSingleItem = this.isSingleItem || false;
+    }
+  }
+
+  get typeModelType() {
+    return "list";
+  }
+
+  get struct() {
+    return this.elementType.struct;
+  }
+
+  get isComplex() {
+    return this.elementType.isComplex;
+  }
+
+  getStoredClassInitializer(name: string) {
+    if (this.isSingleItem) {
+      return `new ${this.elementType.storedClassType}OutputReference(this, "${name}")`;
+    } else {
+      if (this.isComplex) {
+        return `new ${this.storedClassType}(this, "${name}", false)`;
+      } else {
+        return `new cdktf.${uppercaseFirst(
+          this.storedClassType
+        )}(this, "${name}", false)`;
+      }
+    }
+  }
+
+  get storedClassType() {
+    return `${this.elementType.storedClassType}List`;
+  }
+
+  get inputTypeDefinition() {
+    if (this.isSingleItem) {
+      return this.elementType.inputTypeDefinition;
+    } else if (this.elementType.storedClassType === "boolean") {
       return "Array<boolean | cdktf.IResolvable> | cdktf.IResolvable";
+    } else if (this.isComplex) {
+      return `${this.elementType.storedClassType}[] | cdktf.IResolvable`;
+    } else if (this.elementType.typeModelType !== "simple") {
+      return `${this.elementType.inputTypeDefinition}[] | cdktf.IResolvable`;
+    } else {
+      return `${this.elementType.inputTypeDefinition}[]`;
+    }
+  }
 
-    // non-computed list of primitives
-    if (hasListRepresentation && !this.isComputed && this.isPrimitive)
-      return `${this._type}[]`;
-
-    // non-computed list of non-primitives
-    if (hasListRepresentation && !this.isComputed && !this.isPrimitive)
-      return `${this._type}[] | cdktf.IResolvable`;
-
-    // computed lists of primitive types
-    if (hasListRepresentation && this.isComputed && this.isPrimitive)
-      return `${this._type}[]`;
-
-    // computed lists of simple types
-    if (hasListRepresentation && this.isComputed && !this.struct?.isClass)
-      return `${this._type}[] | cdktf.IResolvable`;
-
-    // complex computed list
-    if (hasListRepresentation && this.isComputed && this.isComplex)
-      return `${this._type}[]`;
-
-    // boolean
-    if (this._type === TokenizableTypes.BOOLEAN)
-      return `boolean | cdktf.IResolvable`;
-
-    // custom structs
-    if (this.isComplex && !this.struct?.isClass && !this.isSingleItem) {
-      return `${this._type} | cdktf.IResolvable`;
+  getAttributeAccessFunction(name: string) {
+    switch (this.elementType.storedClassType) {
+      case "string":
+        return `this.getListAttribute('${name}')`;
+      case "number":
+        return `this.getNumberListAttribute('${name}')`;
     }
 
-    // all other types
-    return this._type;
+    return `this.interpolationForAttribute('${name}')`;
   }
 
-  public get storedName(): string {
-    let name = this.name;
-
-    return `${name}${this.isOptional ? " | undefined" : ""}`;
+  get toTerraformFunction() {
+    if (this.isSingleItem) {
+      return this.elementType.toTerraformFunction;
+    }
+    return `cdktf.listMapper(${this.elementType.toTerraformFunction}, ${this.isBlock})`;
   }
 
-  public get isComplex(): boolean {
-    return !!this.struct;
+  get toHclTerraformFunction() {
+    if (this.isSingleItem) {
+      return this.elementType.toHclTerraformFunction;
+    }
+
+    return `cdktf.listMapperHcl(${this.elementType.toHclTerraformFunction}, ${this.isBlock})`;
   }
 
-  public get isPrimitive(): boolean {
-    return !this.isComplex;
+  get hasReferenceClass() {
+    return this.isSingleItem || this.isComplex;
   }
 
-  public get isString(): boolean {
-    return this.name === TokenizableTypes.STRING;
+  get isTokenizable() {
+    switch (this.elementType.storedClassType) {
+      case "string":
+        return true;
+      case "number":
+        return true;
+      default:
+        return false;
+    }
+  }
+}
+
+export class SetAttributeTypeModel implements CollectionAttributeTypeModel {
+  constructor(
+    public readonly elementType: AttributeTypeModel,
+    public readonly isSingleItem: boolean,
+    private readonly isBlock: boolean
+  ) {
+    if (this.struct) {
+      this.struct.isSingleItem = this.isSingleItem || false;
+    }
   }
 
-  public get isNumber(): boolean {
-    return this.name === TokenizableTypes.NUMBER;
+  get typeModelType() {
+    return "set";
   }
 
-  public get isStringSet(): boolean {
-    return this.isSet && this.name === TokenizableTypes.STRING_LIST;
+  get struct() {
+    return this.elementType.struct;
   }
 
-  public get isNumberSet(): boolean {
-    return this.isSet && this._type === TokenizableTypes.NUMBER;
+  get isComplex() {
+    return this.elementType.isComplex;
   }
 
-  public get isBooleanSet(): boolean {
-    return this.isSet && this._type === TokenizableTypes.BOOLEAN;
+  getStoredClassInitializer(name: string) {
+    if (this.isSingleItem) {
+      return `new ${this.elementType.storedClassType}OutputReference(this, "${name}")`;
+    } else {
+      if (this.isComplex) {
+        return `new ${this.storedClassType}(this, "${name}", true)`;
+      } else {
+        return `new cdktf.${uppercaseFirst(
+          this.storedClassType
+        )}(this, "${name}", true)`;
+      }
+    }
   }
 
-  public get isStringList(): boolean {
-    return this.isList && this.name === TokenizableTypes.STRING_LIST;
+  get storedClassType() {
+    return `${this.elementType.storedClassType}List`;
   }
 
-  public get isNumberList(): boolean {
-    return this.isList && this._type === TokenizableTypes.NUMBER;
+  get inputTypeDefinition() {
+    if (this.isSingleItem) {
+      return this.elementType.inputTypeDefinition;
+    } else if (this.elementType.storedClassType === "boolean") {
+      return "Array<boolean | cdktf.IResolvable> | cdktf.IResolvable";
+    } else if (this.isComplex) {
+      return `${this.elementType.storedClassType}[] | cdktf.IResolvable`;
+    } else if (this.elementType.typeModelType !== "simple") {
+      return `${this.elementType.inputTypeDefinition}[] | cdktf.IResolvable`;
+    } else {
+      return `${this.elementType.inputTypeDefinition}[]`;
+    }
   }
 
-  public get isBooleanList(): boolean {
-    return this.isList && this._type === TokenizableTypes.BOOLEAN;
+  getAttributeAccessFunction(name: string) {
+    switch (this.elementType.storedClassType) {
+      case "string":
+        return `cdktf.Fn.tolist(this.getListAttribute('${name}'))`;
+      case "number":
+        return `cdktf.Token.asNumberList(cdktf.Fn.tolist(this.getNumberListAttribute('${name}')))`;
+    }
+
+    // Token.asAny is required because tolist returns an Array encoded token which the listMapper
+    // would try to map over when this is passed to another resource. With Token.asAny() it is left
+    // as is by the listMapper and is later properly resolved to a reference
+    // (this only works in TypeScript currently, same as for referencing lists
+    // [see "interpolationForAttribute(...)" further below])
+    return `cdktf.Token.asAny(cdktf.Fn.tolist(this.interpolationForAttribute('${name}')))`;
   }
 
-  public get isBoolean(): boolean {
-    return (
-      this._type === TokenizableTypes.BOOLEAN && !this.isList && !this.isMap
-    );
+  get toTerraformFunction() {
+    if (this.isSingleItem) {
+      return this.elementType.toTerraformFunction;
+    } else {
+      return `cdktf.listMapper(${this.elementType.toTerraformFunction}, ${this.isBlock})`;
+    }
   }
 
-  public get isStringMap(): boolean {
-    return this.isMap && this._type === TokenizableTypes.STRING;
+  get toHclTerraformFunction() {
+    if (this.isSingleItem) {
+      return this.elementType.toHclTerraformFunction;
+    }
+    return `cdktf.listMapperHcl(${this.elementType.toHclTerraformFunction}, ${this.isBlock})`;
   }
 
-  public get isComputedStringMap(): boolean {
-    return this.isStringMap && this.isComputed && !this.isOptional;
+  get hasReferenceClass() {
+    return this.isSingleItem || this.isComplex;
   }
 
-  public get isNumberMap(): boolean {
-    return this.isMap && this._type === TokenizableTypes.NUMBER;
+  get isTokenizable() {
+    switch (this.elementType.storedClassType) {
+      case "string":
+        return true;
+      case "number":
+        return true;
+      default:
+        return false;
+    }
+  }
+}
+
+export class MapAttributeTypeModel implements CollectionAttributeTypeModel {
+  constructor(public readonly elementType: AttributeTypeModel) {}
+
+  get typeModelType() {
+    return "map";
   }
 
-  public get isComputedNumberMap(): boolean {
-    return this.isNumberMap && this.isComputed && !this.isOptional;
+  get struct() {
+    return this.elementType.struct;
   }
 
-  public get isBooleanMap(): boolean {
-    return this.isMap && this._type === TokenizableTypes.BOOLEAN;
+  get isComplex() {
+    return this.elementType.isComplex;
   }
 
-  public get isComputedBooleanMap(): boolean {
-    return this.isBooleanMap && this.isComputed && !this.isOptional;
+  getStoredClassInitializer(name: string) {
+    if (this.isComplex) {
+      return `new ${this.storedClassType}(this, "${name}")`;
+    } else {
+      return `new cdktf.${uppercaseFirst(
+        this.storedClassType
+      )}(this, "${name}")`;
+    }
   }
 
-  public get isAnyMap(): boolean {
-    return this.isMap && this._type === "any";
+  get storedClassType() {
+    return `${this.elementType.storedClassType}Map`;
   }
 
-  public get isComputedAnyMap(): boolean {
-    return this.isAnyMap && this.isComputed && !this.isOptional;
+  get inputTypeDefinition() {
+    // map of booleans has token support, but booleans don't
+    if (this.elementType.storedClassType === "boolean") {
+      return `{ [key: string]: (${this.elementType.storedClassType} | cdktf.IResolvable) }`;
+    } else if (this.isComplex) {
+      return `{ [key: string]: ${this.elementType.storedClassType} } | cdktf.IResolvable`;
+    } else if (this.elementType.typeModelType !== "simple") {
+      return `{ [key: string]: ${this.elementType.inputTypeDefinition} } | cdktf.IResolvable`;
+    } else {
+      return `{ [key: string]: ${this.elementType.storedClassType} }`;
+    }
   }
 
-  public get isTokenizableMap(): boolean {
-    return (
-      this.isMap &&
-      !this.isList &&
-      (Object.values(TokenizableTypes).includes(
-        this._type as TokenizableTypes
-      ) ||
-        this._type === "any")
-    );
+  getAttributeAccessFunction(name: string) {
+    if (!this.isComplex && this.elementType.typeModelType !== "simple") {
+      return `this.interpolationForAttribute('${name}')`;
+    }
+
+    return `this.get${uppercaseFirst(
+      this.storedClassType
+    )}Attribute('${name}')`;
   }
 
-  public get isComputedComplex(): boolean {
-    return this.isComputed && this.isComplex;
+  get toTerraformFunction() {
+    return `cdktf.hashMapper(${this.elementType.toTerraformFunction})`;
   }
 
-  public get isRootType(): boolean {
-    return this.level === 2;
+  get toHclTerraformFunction() {
+    return `cdktf.hashMapperHcl(${this.elementType.toHclTerraformFunction})`;
   }
 
-  public get isComputedPrimitive(): boolean {
-    return this.isComputed && this.isPrimitive;
+  get hasReferenceClass() {
+    return this.isComplex;
   }
 
-  public get isTokenizable(): boolean {
-    return Object.values(TokenizableTypes).includes(
-      this.name as TokenizableTypes
-    );
-  }
-
-  public get innerType() {
-    return this._type;
+  get isTokenizable() {
+    switch (this.elementType.storedClassType) {
+      case "string":
+        return true;
+      case "number":
+        return true;
+      case "boolean":
+        return true;
+      case "any":
+        return true;
+      default:
+        return false;
+    }
   }
 }

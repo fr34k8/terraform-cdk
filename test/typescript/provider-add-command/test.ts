@@ -1,6 +1,11 @@
 // Copyright (c) HashiCorp, Inc
 // SPDX-License-Identifier: MPL-2.0
-import { TestDriver, onPosix, onWindows } from "../../test-helper";
+import {
+  TestDriver,
+  onPosix,
+  onWindows,
+  packageJsonWithDependency,
+} from "../../test-helper";
 
 describe("provider add command", () => {
   describe("pre-built", () => {
@@ -42,12 +47,8 @@ describe("provider add command", () => {
       );
       expect(res.stdout).toContain(`Package installed.`);
 
-      const packageJson = JSON.parse(driver.readLocalFile("package.json"));
-
-      expect(packageJson.dependencies).toEqual(
-        expect.objectContaining({
-          "@cdktf/provider-random": expect.any(String),
-        })
+      expect(driver.packageJson()).toEqual(
+        packageJsonWithDependency("@cdktf/provider-random")
       );
     }, 120_000);
   });
@@ -70,11 +71,10 @@ describe("provider add command", () => {
         ]);
         const config = JSON.parse(driver.readLocalFile("cdktf.json"));
         expect(config.terraformProviders).toMatchInlineSnapshot(`
-        Array [
-          "null@ ~> 3.1.0",
-          "hashicorp/local@=2.2.3",
-        ]
-      `);
+          [
+            "hashicorp/local@=2.2.3",
+          ]
+        `);
 
         expect(res.stdout).toContain(
           `Local providers have been updated. Running cdktf get to update...`
@@ -102,11 +102,10 @@ describe("provider add command", () => {
         ]);
         const config = JSON.parse(driver.readLocalFile("cdktf.json"));
         expect(config.terraformProviders).toMatchInlineSnapshot(`
-        Array [
-          "null@ ~> 3.1.0",
-          "hashicorp/local@=2.2.3",
-        ]
-      `);
+                  [
+                    "hashicorp/local@=2.2.3",
+                  ]
+              `);
 
         expect(res.stdout).toContain(
           `Local providers have been updated. Running cdktf get to update...`

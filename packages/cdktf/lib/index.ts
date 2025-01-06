@@ -30,7 +30,16 @@ export * from "./synthesize";
 export * from "./annotations";
 export * from "./aspect";
 export * from "./terraform-functions";
+export * from "./terraform-operators";
 export * from "./tfExpression";
 export * from "./terraform-addressable";
 export * from "./terraform-iterator";
 export * from "./terraform-provisioner";
+export * from "./terraform-conditions";
+export * from "./terraform-count";
+export * from "./importable-resource";
+export * from "./terraform-resource-targets";
+export * from "./upgrade-id-aspect";
+export * from "./terraform-data-resource";
+// required for JSII because Fn extends from it
+export * from "./functions/terraform-functions.generated";

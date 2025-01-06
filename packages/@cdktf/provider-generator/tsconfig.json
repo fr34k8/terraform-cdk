@@ -1,13 +1,12 @@
 {
   "compilerOptions": {
     "alwaysStrict": true,
-    "charset": "utf8",
     "declaration": true,
     "experimentalDecorators": true,
     "inlineSourceMap": true,
     "inlineSources": true,
     "lib": [
-      "es2018"
+      "es2020"
     ],
     "module": "CommonJS",
     "noEmitOnError": false,
@@ -23,13 +22,17 @@
     "strictNullChecks": true,
     "strictPropertyInitialization": true,
     "stripInternal": true,
+    "skipLibCheck": true,
     "target": "ES2018",
     "incremental": true,
     "esModuleInterop": true
   },
-  "include": [
-    "**/*.ts",
+  "files": [
+    "ambient.d.ts"
   ],
+  "include": [
+    "lib/**/*.ts"
+, "../commons/src/module-schema.ts"  ],
   "exclude": [
     "node_modules",
     "**/*.d.ts",

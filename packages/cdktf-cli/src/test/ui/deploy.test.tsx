@@ -1,3 +1,8 @@
+/**
+ * Copyright (c) HashiCorp, Inc.
+ * SPDX-License-Identifier: MPL-2.0
+ */
+
 import React from "react";
 import { render } from "ink-testing-library";
 import { Outputs } from "../../bin/cmds/ui/components";
@@ -8,7 +13,7 @@ import {
   DeployingResourceApplyState,
   PlannedResourceAction,
   TerraformOutput,
-} from "../../lib/models/terraform";
+} from "@cdktf/cli-core";
 
 test("DeploySummary", async () => {
   const resource: DeployingResource = {
@@ -53,13 +58,13 @@ test("Output", async () => {
   expect(stripAnsi(lastFrame())).toMatchInlineSnapshot(`
     "foo = baz
     map = {
-      \\"keyA\\": \\"valueA\\",
-      \\"keyB\\": \\"valueB\\"
+      "keyA": "valueA",
+      "keyB": "valueB"
     }
     list = [
-      \\"A\\",
-      \\"B\\",
-      \\"C\\"
+      "A",
+      "B",
+      "C"
     ]
     password = <sensitive>"
   `);

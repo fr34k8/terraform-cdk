@@ -3,6 +3,7 @@
 import { CodeMaker } from "codemaker";
 import { ResourceModel } from "../models";
 import { AttributesEmitter } from "./attributes-emitter";
+import { sanitizedComment } from "../sanitized-comments";
 
 export class ResourceEmitter {
   attributesEmitter: AttributesEmitter;
@@ -13,17 +14,20 @@ export class ResourceEmitter {
 
   public emit(resource: ResourceModel) {
     this.code.line();
-    this.code.line(`/**`);
-    this.code.line(
-      `* Represents a {@link ${resource.linkToDocs} ${resource.terraformResourceType}}`
+    const comment = sanitizedComment(this.code);
+    comment.line(
+      `Represents a {@link ${resource.linkToDocs} ${resource.terraformResourceType}}`
     );
-    this.code.line(`*/`);
+    comment.end();
     this.code.openBlock(
       `export class ${resource.className} extends cdktf.${resource.parentClassName}`
     );
 
     this.emitHeader("STATIC PROPERTIES");
     this.emitStaticProperties(resource);
+
+    this.emitHeader("STATIC Methods");
+    this.emitStaticMethods(resource);
 
     this.emitHeader("INITIALIZER");
     this.emitInitializer(resource);
@@ -34,6 +38,7 @@ export class ResourceEmitter {
     // synthesis
     this.emitHeader("SYNTHESIS");
     this.emitResourceSynthesis(resource);
+    this.emitHclResourceSynthesis(resource);
 
     this.code.closeBlock(); // construct
   }
@@ -49,6 +54,55 @@ export class ResourceEmitter {
     this.code.line(
       `public static readonly tfResourceType = "${resource.terraformResourceType}";`
     );
+  }
+
+  private emitStaticMethods(resource: ResourceModel) {
+    const comment = sanitizedComment(this.code);
+    comment.line(
+      `Generates CDKTF code for importing a ${resource.className} resource upon running "cdktf plan <stack-name>"`
+    );
+    comment.line(`@param scope The scope in which to define this construct`);
+    comment.line(
+      `@param importToId The construct id used in the generated config for the ${resource.className} to import`
+    );
+    comment.line(
+      `@param importFromId The id of the existing ${resource.className} that should be imported. Refer to the {@link ${resource.linkToDocs}#import import section} in the documentation of this resource for the id to use`
+    );
+    comment.line(
+      `@param provider? Optional instance of the provider where the ${resource.className} to import is found`
+    );
+    comment.end();
+    this.code.line(
+      `public static generateConfigForImport(scope: Construct, importToId: string, importFromId: string, provider?: cdktf.TerraformProvider) {
+        return new cdktf.ImportableResource(scope, importToId, { terraformResourceType: "${resource.terraformResourceType}", importId: importFromId, provider });
+      }`
+    );
+  }
+
+  private emitHclResourceSynthesis(resource: ResourceModel) {
+    this.code.line();
+    this.code.openBlock(
+      `protected synthesizeHclAttributes(): { [name: string]: any }`
+    );
+    this.code.open(`const attrs = {`);
+
+    for (const att of resource.synthesizableAttributes) {
+      this.attributesEmitter.emitToHclTerraform(att, false);
+    }
+
+    this.code.close(`};`);
+
+    if (resource.synthesizableAttributes.length > 0) {
+      this.code.line();
+      this.code.line(`// remove undefined attributes`);
+      this.code.line(
+        `return Object.fromEntries(Object.entries(attrs).filter(([_, value]) => value !== undefined && value.value !== undefined ))`
+      );
+    } else {
+      this.code.line(`return attrs;`);
+    }
+
+    this.code.closeBlock();
   }
 
   private emitResourceSynthesis(resource: ResourceModel) {
@@ -78,21 +132,19 @@ export class ResourceEmitter {
 
   private emitInitializer(resource: ResourceModel) {
     this.code.line();
-    this.code.line(`/**`);
-    this.code.line(
-      `* Create a new {@link ${resource.linkToDocs} ${
+    const comment = sanitizedComment(this.code);
+    comment.line(
+      `Create a new {@link ${resource.linkToDocs} ${
         resource.terraformResourceType
       }} ${resource.isDataSource ? "Data Source" : "Resource"}`
     );
-    this.code.line(`*`);
-    this.code.line(
-      `* @param scope The scope in which to define this construct`
+    comment.line(``);
+    comment.line(`@param scope The scope in which to define this construct`);
+    comment.line(
+      `@param id The scoped construct ID. Must be unique amongst siblings in the same scope`
     );
-    this.code.line(
-      `* @param id The scoped construct ID. Must be unique amongst siblings in the same scope`
-    );
-    this.code.line(`* @param options ${resource.configStruct.attributeType}`);
-    this.code.line(`*/`);
+    comment.line(`@param options ${resource.configStruct.attributeType}`);
+    comment.end();
     this.code.openBlock(
       `public constructor(scope: Construct, id: string, config: ${resource.configStruct.attributeType})`
     );

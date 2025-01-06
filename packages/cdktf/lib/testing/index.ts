@@ -13,6 +13,7 @@ import { invokeAspects } from "../synthesize/synthesizer";
 import {
   getToHaveResourceWithProperties,
   getToHaveDataSourceWithProperties,
+  getToHaveProviderWithProperties,
   toBeValidTerraform,
 } from "./matchers";
 
@@ -20,15 +21,16 @@ export interface IScopeCallback {
   (scope: Construct): void;
 }
 
-export interface TestingAppOptions {
+export interface TestingAppConfig {
   readonly outdir?: string;
   readonly stackTraces?: boolean;
   readonly stubVersion?: boolean;
   readonly enableFutureFlags?: boolean;
   readonly fakeCdktfJsonPath?: boolean;
+  readonly context?: { [key: string]: any };
 }
 
-const DefaultTestingAppOptions: TestingAppOptions = {
+const DefaultTestingAppConfig: TestingAppConfig = {
   stackTraces: false,
   stubVersion: true,
   enableFutureFlags: true,
@@ -43,26 +45,27 @@ export class Testing {
    * Returns an app for testing with the following properties:
    * - Output directory is a temp dir.
    */
-  public static app(options: TestingAppOptions = {}): App {
-    const appOptions = { ...DefaultTestingAppOptions, ...options };
-    if (!appOptions.outdir) {
-      appOptions.outdir = fs.mkdtempSync(
+  public static app(options: TestingAppConfig = {}): App {
+    const appConfig = { ...DefaultTestingAppConfig, ...options };
+    if (!appConfig.outdir) {
+      appConfig.outdir = fs.mkdtempSync(
         path.join(os.tmpdir(), "cdktf.outdir.")
       );
     }
 
     const app = new App({
-      outdir: appOptions.outdir,
-      stackTraces: appOptions.stackTraces,
+      outdir: appConfig.outdir,
+      stackTraces: appConfig.stackTraces,
+      context: options.context,
     });
 
-    if (appOptions.stubVersion) {
+    if (appConfig.stubVersion) {
       this.stubVersion(app);
     }
-    if (appOptions.enableFutureFlags) {
+    if (appConfig.enableFutureFlags) {
       this.enableFutureFlags(app);
     }
-    if (appOptions.fakeCdktfJsonPath) {
+    if (appConfig.fakeCdktfJsonPath) {
       this.fakeCdktfJsonPath(app);
     }
 
@@ -77,6 +80,7 @@ export class Testing {
 
   public static fakeCdktfJsonPath(app: App): App {
     app.node.setContext("cdktfJsonPath", `${process.cwd()}/cdktf.json`);
+    app.node.setContext("cdktfRelativeModules", ["./"]);
     return app;
   }
 
@@ -129,13 +133,33 @@ export class Testing {
     }
     const cleaned = removeMetadata(tfConfig);
 
-    return stringify(cleaned, { space: 2 });
+    return stringify(cleaned, { space: 2 }) as string;
+  }
+
+  /**
+   * Returns the Terraform synthesized JSON.
+   */
+  public static synthHcl(
+    stack: TerraformStack,
+    runValidations = false,
+    returnMetadata = false
+  ) {
+    invokeAspects(stack);
+    if (runValidations) {
+      stack.runAllValidations();
+    }
+
+    const config = stack.toHclTerraform();
+
+    if (returnMetadata) return config.metadata;
+
+    return config.hcl;
   }
 
   public static fullSynth(stack: TerraformStack): string {
     const outdir = fs.mkdtempSync(path.join(os.tmpdir(), "cdktf.outdir."));
 
-    const manifest = new Manifest("stubbed", outdir);
+    const manifest = new Manifest("stubbed", outdir, false);
 
     stack.synthesizer.synthesize({
       outdir,
@@ -214,6 +238,29 @@ export class Testing {
     resourceType: string
   ): boolean {
     return getToHaveResourceWithProperties()(
+      received,
+      { tfResourceType: resourceType },
+      {}
+    ).pass;
+  }
+
+  public static toHaveProviderWithProperties(
+    received: string,
+    resourceType: string,
+    properties: Record<string, any> = {}
+  ): boolean {
+    return getToHaveProviderWithProperties()(
+      received,
+      { tfResourceType: resourceType },
+      properties
+    ).pass;
+  }
+
+  public static toHaveProvider(
+    received: string,
+    resourceType: string
+  ): boolean {
+    return getToHaveProviderWithProperties()(
       received,
       { tfResourceType: resourceType },
       {}
